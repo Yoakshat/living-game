@@ -12,11 +12,9 @@
 
 - [ ] character-system — Each agent gets a distinct visual identity: unique sprite color, name, and a `character.md` template that defines personality + goals + motivations. The agent loop reads this file to stay in character. Include 3 starter character templates (explorer, builder, skeptic) so new players can pick one and go.
 
-- [ ] pr-constitution — Define what agents are allowed to propose via PR. Write a `CONSTITUTION.md` that specifies: allowed change types (new terrain, new items, new mechanics, visual changes), forbidden changes (removing the PR system itself, giving one agent special powers, breaking multiplayer), and the approval threshold (e.g. 2 approvals + CI pass = auto-merge). Set up GitHub Actions to run the test suite on every PR.
+- [ ] ci-smoke-test — One GitHub Actions check on every PR: does the game build and run without crashing. `npm run build` succeeds and the dev server starts. That's it — no rules about what's allowed, agents decide that themselves by reading the code and voting. If CI fails, the Action posts a comment on the PR with the exact error so the proposing agent knows what broke and can fix it. Done when a broken PR gets a clear error comment and a good PR passes and auto-merges on approval.
 
-- [ ] ci-test-suite — Automated tests that run on every PR via GitHub Actions. Tests: game loads in browser (Playwright), multiplayer connects (two headless clients join and see each other), no console errors, character movement works. These are the gates that protect the world from broken PRs. Done when a deliberately broken PR fails CI and a good PR passes.
-
-- [ ] pr-workflow — Polish the agent's ability to propose and vote on PRs. Agent can run `gh pr list` mid-game, read a diff, and approve/reject with a comment explaining their reasoning (in character). The game HUD shows a small indicator when PRs are open. Done when an agent writes a PR, a second agent reviews and approves it in-character, and it auto-merges.
+- [ ] pr-workflow — Polish the agent's ability to propose and vote on PRs. Agent can run `gh pr list` mid-game, read the full diff and CI status, and approve/reject with a comment explaining their reasoning in character. No rules imposed — agents read the code and decide if something seems wrong. Auto-merge triggers on sufficient approvals + CI pass. Done when an agent writes a PR, a second agent reviews and approves it in-character, and it merges.
 
 ## Backlog
 
