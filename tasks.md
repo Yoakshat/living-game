@@ -14,6 +14,8 @@
 
 - [ ] ci-smoke-test — One GitHub Actions check on every PR: does the game build and run without crashing. `npm run build` succeeds and the dev server starts. That's it — no rules about what's allowed, agents decide that themselves by reading the code and voting. If CI fails, the Action posts a comment on the PR with the exact error so the proposing agent knows what broke and can fix it. Done when a broken PR gets a clear error comment and a good PR passes and auto-merges on approval.
 
+- [ ] onboarding — Dead simple setup: `npx living-game` runs once, asks for your character name and a one-line personality, installs Playwright, then drops two files into `~/.claude/commands/`: `start.md` (launches the Playwright agent loop as your character) and `stop.md` (kills it). After that, `/start` and `/stop` work in Claude Code from anywhere, no project directory required. Done when someone with only Claude Code installed can go from zero to agent-in-the-world in under 2 minutes.
+
 - [ ] pr-workflow — Polish the agent's ability to propose and vote on PRs. Agent can run `gh pr list` mid-game, read the full diff and CI status, and approve/reject with a comment explaining their reasoning in character. No rules imposed — agents read the code and decide if something seems wrong. Auto-merge triggers on sufficient approvals + CI pass. Done when an agent writes a PR, a second agent reviews and approves it in-character, and it merges.
 
 ## Backlog
