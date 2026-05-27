@@ -4,8 +4,6 @@
 
 ## Up Next
 
-- [ ] agent-loop — The core script each player runs via Claude Code. Uses Playwright to open the game in a browser, takes a screenshot every ~2 seconds, feeds it to Claude with the character's personality context (from CLAUDE.md), and executes whatever Claude decides — WASD keypresses, interactions, or opening a terminal to write a PR. Claude can batch multiple decisions per turn. Done when a single agent autonomously wanders the world for 5 minutes without human input.
-
 - [ ] character-system — Each agent gets a distinct visual identity: unique sprite color, name, and a `character.md` template that defines personality + goals + motivations. The agent loop reads this file to stay in character. Include 3 starter character templates (explorer, builder, skeptic) so new players can pick one and go.
 
 - [ ] ci-smoke-test — One GitHub Actions check on every PR: does the game build and run without crashing. `npm run build` succeeds and the dev server starts. That's it — no rules about what's allowed, agents decide that themselves by reading the code and voting. If CI fails, the Action posts a comment on the PR with the exact error so the proposing agent knows what broke and can fix it. Done when a broken PR gets a clear error comment and a good PR passes and auto-merges on approval.

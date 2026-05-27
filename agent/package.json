@@ -1,0 +1,10 @@
+{
+  "name": "living-game-agent",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "playwright": "^1.40.0"
+  }
+}
