@@ -283,6 +283,63 @@ function makePlayerTextures(scene) {
   return { size: PLAYER_SIZE };
 }
 
+// --- Campfire --------------------------------------------------------------
+// A visible landmark at the world center. Stone ring, glowing embers, orange
+// flames with a bright yellow core. Purely decorative — no collision.
+const CAMPFIRE_W = 48;
+const CAMPFIRE_H = 48;
+
+function makeCampfireTexture(scene, key) {
+  const g = scene.make.graphics({ x: 0, y: 0, add: false });
+  const cx = CAMPFIRE_W / 2, cy = CAMPFIRE_H / 2 + 4;
+
+  // Stone ring — dark grey boulders arranged in a circle.
+  const stones = [0, 45, 90, 135, 180, 225, 270, 315];
+  for (const deg of stones) {
+    const rad = (deg * Math.PI) / 180;
+    const sx = cx + Math.cos(rad) * 13;
+    const sy = cy + Math.sin(rad) * 9;
+    g.fillStyle(0x7a7060, 1);
+    g.fillEllipse(sx, sy, 8, 6);
+    g.fillStyle(0x5a5248, 1);
+    g.fillEllipse(sx + 1, sy + 1, 5, 4);
+  }
+
+  // Glowing ember bed — orange-red oval at the base.
+  g.fillStyle(0xcc3300, 1);
+  g.fillEllipse(cx, cy + 2, 18, 10);
+  g.fillStyle(0xff6600, 0.9);
+  g.fillEllipse(cx, cy + 1, 12, 7);
+  g.fillStyle(0xffaa00, 0.8);
+  g.fillEllipse(cx, cy, 7, 4);
+
+  // Flames — layered triangles: outer orange, inner yellow, bright core.
+  g.fillStyle(0xff6600, 0.95);
+  g.fillTriangle(cx - 8, cy, cx + 8, cy, cx - 2, cy - 18);
+  g.fillTriangle(cx - 6, cy, cx + 9, cy, cx + 3, cy - 15);
+
+  g.fillStyle(0xffaa00, 0.9);
+  g.fillTriangle(cx - 5, cy, cx + 5, cy, cx, cy - 14);
+  g.fillTriangle(cx - 3, cy, cx + 7, cy, cx + 4, cy - 11);
+
+  g.fillStyle(0xffee55, 1);
+  g.fillTriangle(cx - 3, cy - 1, cx + 3, cy - 1, cx, cy - 10);
+
+  // Bright core.
+  g.fillStyle(0xffffff, 0.7);
+  g.fillCircle(cx, cy - 4, 2);
+
+  // Smoke wisps — faint grey circles drifting up.
+  g.fillStyle(0xaaaaaa, 0.25);
+  g.fillCircle(cx - 2, cy - 22, 4);
+  g.fillStyle(0xaaaaaa, 0.15);
+  g.fillCircle(cx + 3, cy - 28, 5);
+
+  g.generateTexture(key, CAMPFIRE_W, CAMPFIRE_H);
+  g.destroy();
+  return { w: CAMPFIRE_W, h: CAMPFIRE_H };
+}
+
 // Generate everything; returns metadata the scene needs for sizing/bodies.
 export function generateTextures(scene) {
   const grassVariants = 4;
@@ -292,6 +349,7 @@ export function generateTextures(scene) {
   const tree = makeTreeTexture(scene, 'tree');
   const rock = makeRockTexture(scene, 'rock');
   const player = makePlayerTextures(scene);
+  const campfire = makeCampfireTexture(scene, 'campfire');
 
   return {
     tile: TILE,
@@ -299,5 +357,6 @@ export function generateTextures(scene) {
     tree,
     rock,
     player,
+    campfire,
   };
 }

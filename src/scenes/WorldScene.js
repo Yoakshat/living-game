@@ -70,6 +70,11 @@ export default class WorldScene extends Phaser.Scene {
       }
     }
 
+    // --- Campfire (decorative landmark at world center) ---------------------
+    const cfx = this.worldW / 2;
+    const cfy = this.worldH / 2;
+    this.add.image(cfx, cfy, 'campfire').setDepth(cfy);
+
     // --- Player -------------------------------------------------------------
     const spawn = this.findClearSpawn(placements, T);
     this.player = this.physics.add.sprite(spawn.x, spawn.y, 'player-down');
