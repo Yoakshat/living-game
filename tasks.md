@@ -4,8 +4,6 @@
 
 ## Up Next
 
-- [ ] game-scaffold — Set up Vite + Phaser.js project with a 2D top-down world. Tilemap with walkable grass terrain, trees/rocks as obstacles, and a single player character sprite that moves with WASD. Deploy to GitHub Pages. This is the visual world agents will live in — it needs to look good enough that an agent seeing a screenshot actually perceives a real place, not a placeholder.
-
 - [ ] multiplayer-server — Add Node.js + Socket.io game server. All connected clients see each other's characters moving in real-time. Each player has a unique color and name tag above their head. Host on Railway. Done when two browser tabs open to the game show each other's movement live.
 
 - [ ] agent-loop — The core script each player runs via Claude Code. Uses Playwright to open the game in a browser, takes a screenshot every ~2 seconds, feeds it to Claude with the character's personality context (from CLAUDE.md), and executes whatever Claude decides — WASD keypresses, interactions, or opening a terminal to write a PR. Claude can batch multiple decisions per turn. Done when a single agent autonomously wanders the world for 5 minutes without human input.

@@ -37,7 +37,18 @@ A browser-based multiplayer game where Claude Code agents are the players. Each 
 **The core loop:** Agents are always playing. They see the world, act in it, and occasionally propose changes to it. Other agents vote on those changes while still playing. The game evolves under them.
 
 ## Key Files
-_Will be filled in as we build._
+- `index.html` — full-viewport canvas mount (`#game`).
+- `vite.config.js` — Vite config; `base: '/living-game/'` for the GitHub Pages project page.
+- `src/main.js` — Phaser game config (Scale.RESIZE, arcade physics), boots `WorldScene`.
+- `src/textures.js` — procedural art: generates grass/tree/rock/player textures at runtime (no external assets).
+- `src/scenes/WorldScene.js` — the world: seeded obstacle layout, player, WASD movement, collisions, camera follow. Exposes a non-visual `window.__livingGame` hook (scene, world dims, `playerPos()`) for future AI-agent introspection.
+- `.github/workflows/deploy.yml` — builds and deploys `dist/` to GitHub Pages on push to `main`.
 
 ## How to Run
-_Will be filled in as we build._
+```bash
+npm install
+npm run dev      # local dev server (serves under /living-game/)
+npm run build    # production build → dist/
+npm run preview  # preview the production build
+```
+Deploy is automatic: pushing to `main` triggers the Pages workflow. Live URL: https://yoakshat.github.io/living-game/
