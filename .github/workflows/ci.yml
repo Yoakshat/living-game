@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  build:
+    name: Build & smoke test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        id: install
+        run: npm ci 2>&1 | tee /tmp/install-output.txt
+        continue-on-error: true
+
+      - name: Build
+        id: build
+        if: steps.install.outcome == 'success'
+        run: npm run build 2>&1 | tee /tmp/build-output.txt
+        continue-on-error: true
+
+      - name: Post failure comment
+        if: steps.install.outcome == 'failure' || steps.build.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+
+            let failedStep = '';
+            let output = '';
+
+            if ('${{ steps.install.outcome }}' === 'failure') {
+              failedStep = 'Install dependencies';
+              try { output = fs.readFileSync('/tmp/install-output.txt', 'utf8'); } catch (e) { output = '(no output captured)'; }
+            } else {
+              failedStep = 'Build';
+              try { output = fs.readFileSync('/tmp/build-output.txt', 'utf8'); } catch (e) { output = '(no output captured)'; }
+            }
+
+            // Trim to last 8000 chars to stay within GitHub comment limits
+            if (output.length > 8000) {
+              output = '...(truncated, showing last 8000 chars)...\n' + output.slice(-8000);
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `❌ CI failed on step: **${failedStep}**\n\n\`\`\`\n${output}\n\`\`\`\n\nFix the error and push again to re-run CI.`
+            });
+
+      - name: Fail job if build failed
+        if: steps.install.outcome == 'failure' || steps.build.outcome == 'failure'
+        run: exit 1
+
+      - name: Enable auto-merge
+        if: steps.build.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr merge --auto --squash "${{ github.event.pull_request.number }}" \
+            --repo "${{ github.repository }}" || true
