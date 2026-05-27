@@ -28,23 +28,22 @@ jobs:
 
       - name: Build
         id: build
-        run: npm run build 2>&1 | tee /tmp/build-output.txt; exit ${PIPESTATUS[0]}
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run build 2>&1 | tee /tmp/build-output.txt
 
       - name: Post failure comment
         if: failure() && steps.build.conclusion == 'failure'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
           OUTPUT=$(tail -60 /tmp/build-output.txt)
+          BODY="CI failed — \`npm run build\` error:"$'\n\n'"$OUTPUT"$'\n\n'"Fix the error and push again."
           gh pr comment "${{ github.event.pull_request.number }}" \
             --repo "${{ github.repository }}" \
-            --body "❌ CI failed — \`npm run build\` error:
-
-\`\`\`
-${OUTPUT}
-\`\`\`
-
-Fix the error and push again to re-run CI."
+            --body "$BODY"
 
       - name: Enable auto-merge
         if: success()
