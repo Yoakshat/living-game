@@ -1,4 +1,5 @@
 import { generateTextures } from '../textures.js';
+import { io } from 'socket.io-client';
 
 // World is measured in tiles; pixel size derives from the tile size.
 const WORLD_TILES_X = 32;
@@ -6,9 +7,26 @@ const WORLD_TILES_Y = 24;
 
 const PLAYER_SPEED = 200; // px/sec
 
+// How often we emit our position to the server (ms). 50ms ≈ 20 Hz.
+const MOVE_EMIT_INTERVAL = 50;
+
+// How quickly remote players interpolate toward their target position.
+// 0 = no lerp (instant), 1 = never arrives. Good range: 0.15–0.3 per frame.
+const LERP_ALPHA = 0.2;
+
 export default class WorldScene extends Phaser.Scene {
   constructor() {
     super('WorldScene');
+    // Map of remote players: id → { sprite, nameTag, targetX, targetY }
+    this.remotePlayers = new Map();
+    this._socket = null;
+    this._selfId = null;
+    this._selfColor = null;
+    this._selfName = null;
+    // Queue events that arrive before the scene is fully ready.
+    this._eventQueue = [];
+    this._ready = false;
+    this._lastEmitTime = 0;
   }
 
   create() {
@@ -21,34 +39,27 @@ export default class WorldScene extends Phaser.Scene {
 
     this.physics.world.setBounds(0, 0, this.worldW, this.worldH);
 
-    // --- Grass ground ------------------------------------------------------
-    // Tile the whole world with grass variants. A static TileSprite per row
-    // would be cheaper, but per-tile variant selection gives the textured,
-    // non-uniform field the spec wants. Deterministic variant pick from coords.
+    // --- Grass ground -------------------------------------------------------
     this.add.rectangle(
       this.worldW / 2,
       this.worldH / 2,
       this.worldW,
       this.worldH,
       0x4a8c3f
-    ); // safety base under tiles
+    );
     for (let ty = 0; ty < WORLD_TILES_Y; ty++) {
       for (let tx = 0; tx < WORLD_TILES_X; tx++) {
         const v = (tx * 7 + ty * 13 + ((tx * ty) % 5)) % meta.grassVariants;
         const img = this.add.image(tx * T, ty * T, 'grass-' + v).setOrigin(0, 0);
-        // Subtle per-tile flip to further break up repetition.
         if ((tx + ty) % 2 === 0) img.setFlipX(true);
         if ((tx * ty) % 3 === 0) img.setFlipY(true);
       }
     }
 
-    // --- Obstacles ---------------------------------------------------------
+    // --- Obstacles ----------------------------------------------------------
     this.obstacles = this.physics.add.staticGroup();
 
     const placements = this.buildPlacements(T);
-
-    // Sort by Y so closer (lower) obstacles render in front of farther ones
-    // for a believable top-down overlap.
     placements.sort((a, b) => a.y - b.y);
 
     for (const p of placements) {
@@ -59,61 +70,212 @@ export default class WorldScene extends Phaser.Scene {
       }
     }
 
-    // --- Player ------------------------------------------------------------
-    // Spawn in a guaranteed-clear spot near the center.
+    // --- Player -------------------------------------------------------------
     const spawn = this.findClearSpawn(placements, T);
     this.player = this.physics.add.sprite(spawn.x, spawn.y, 'player-down');
     this.player.setCollideWorldBounds(true);
-    // Collision body sits around the feet/lower body so the head can overlap
-    // canopy/obstacle tops naturally.
     const ps = meta.player.size;
     this.player.body.setSize(ps * 0.5, ps * 0.4);
     this.player.body.setOffset(ps * 0.25, ps * 0.5);
-    this.player.setDepth(spawn.y); // depth-sort with obstacles
+    this.player.setDepth(spawn.y);
     this.facing = 'down';
 
     this.physics.add.collider(this.player, this.obstacles);
 
-    // --- Camera ------------------------------------------------------------
+    // --- Camera -------------------------------------------------------------
     this.cameras.main.setBounds(0, 0, this.worldW, this.worldH);
     this.cameras.main.setBackgroundColor(0x2d402a);
-    // Zoom in a touch so the player reads as a figure and obstacle detail is
-    // legible in a screenshot, while still showing a generous slice of world.
     this.cameras.main.setZoom(1.6);
     this.cameras.main.startFollow(this.player, true, 0.12, 0.12);
     this.cameras.main.setRoundPixels(true);
 
-    // --- Input -------------------------------------------------------------
+    // --- Input --------------------------------------------------------------
     this.keys = this.input.keyboard.addKeys({
       up: Phaser.Input.Keyboard.KeyCodes.W,
       down: Phaser.Input.Keyboard.KeyCodes.S,
       left: Phaser.Input.Keyboard.KeyCodes.A,
       right: Phaser.Input.Keyboard.KeyCodes.D,
     });
-    // Stop keys from scrolling the page; keep focus on canvas.
     this.input.keyboard.addCapture(['W', 'A', 'S', 'D']);
 
-    // Lightweight, non-visual hook for automated tests / agents to read state.
-    // Does not render anything; safe to keep in production.
+    // --- Introspection hook -------------------------------------------------
     const scene = this;
     window.__livingGame = {
       scene,
       world: { w: this.worldW, h: this.worldH },
       playerPos: () => ({ x: scene.player.x, y: scene.player.y }),
+      remotePlayers: () =>
+        [...scene.remotePlayers.entries()].map(([id, rp]) => ({
+          id,
+          x: rp.sprite.x,
+          y: rp.sprite.y,
+        })),
     };
+
+    // --- Local player name tag ----------------------------------------------
+    // Will be set once we get self:init from server.
+    this._selfNameTag = null;
+
+    // --- Connect to multiplayer server --------------------------------------
+    this._connectMultiplayer(spawn);
+
+    // Mark scene ready — flush any queued events.
+    this._ready = true;
+    for (const fn of this._eventQueue) fn();
+    this._eventQueue = [];
   }
 
-  // Distribute obstacles across the world in a scattered-but-not-uniform way.
-  // Uses jittered grid cells, skips some cells, and biases tree/rock mix so the
-  // result feels like a small natural place rather than a regular grid.
+  _connectMultiplayer(spawn) {
+    const serverUrl =
+      (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_SERVER_URL)
+        ? import.meta.env.VITE_SERVER_URL
+        : 'http://localhost:3001';
+
+    let socket;
+    try {
+      socket = io(serverUrl, {
+        reconnectionAttempts: 5,
+        reconnectionDelay: 1000,
+        timeout: 5000,
+      });
+    } catch (err) {
+      console.warn('[multiplayer] Could not create socket:', err);
+      return;
+    }
+
+    this._socket = socket;
+
+    socket.on('connect', () => {
+      console.log('[multiplayer] connected:', socket.id);
+      // Emit our spawn position so the server state is accurate immediately.
+      socket.emit('player:move', { x: this.player.x, y: this.player.y });
+    });
+
+    socket.on('connect_error', (err) => {
+      console.warn('[multiplayer] connection error — playing offline:', err.message);
+    });
+
+    // Server sends our identity + full current player list.
+    socket.on('self:init', (data) => {
+      this._enqueue(() => this._onSelfInit(data));
+    });
+
+    // A new player joined while we were already connected.
+    socket.on('player:join', (data) => {
+      this._enqueue(() => this._onPlayerJoin(data));
+    });
+
+    // A remote player moved.
+    socket.on('player:moved', (data) => {
+      this._enqueue(() => this._onPlayerMoved(data));
+    });
+
+    // A player disconnected.
+    socket.on('player:left', (data) => {
+      this._enqueue(() => this._onPlayerLeft(data));
+    });
+
+    socket.on('disconnect', (reason) => {
+      console.warn('[multiplayer] disconnected:', reason);
+    });
+  }
+
+  // Queue an event handler to run after scene is ready, or run immediately.
+  _enqueue(fn) {
+    if (this._ready) {
+      fn();
+    } else {
+      this._eventQueue.push(fn);
+    }
+  }
+
+  _onSelfInit(data) {
+    const { id, color, name, others } = data;
+    this._selfId = id;
+    this._selfColor = color;
+    this._selfName = name;
+
+    // Tint local player sprite to server-assigned color.
+    this.player.setTint(Phaser.Display.Color.HexStringToColor(color).color);
+
+    // Local player name tag.
+    this._selfNameTag = this._makeNameTag(name);
+
+    // Render all players already in the world.
+    for (const other of others) {
+      this._spawnRemotePlayer(other);
+    }
+  }
+
+  _onPlayerJoin(data) {
+    if (data.id === this._selfId) return; // shouldn't happen, but guard
+    this._spawnRemotePlayer(data);
+  }
+
+  _onPlayerMoved(data) {
+    const rp = this.remotePlayers.get(data.id);
+    if (!rp) return;
+    rp.targetX = data.x;
+    rp.targetY = data.y;
+  }
+
+  _onPlayerLeft(data) {
+    const rp = this.remotePlayers.get(data.id);
+    if (!rp) return;
+    rp.sprite.destroy();
+    rp.nameTag.destroy();
+    this.remotePlayers.delete(data.id);
+    console.log('[multiplayer] player left:', data.id);
+  }
+
+  // Create a remote player sprite + name tag and add to the map.
+  _spawnRemotePlayer({ id, color, name, x, y }) {
+    if (this.remotePlayers.has(id)) return; // already exists (duplicate event)
+
+    const sprite = this.physics.add.sprite(x, y, 'player-down');
+    // Remove body so remote players don't collide with anything.
+    sprite.body.enable = false;
+
+    // Apply the server-assigned color as a tint.
+    const tintColor = Phaser.Display.Color.HexStringToColor(color).color;
+    sprite.setTint(tintColor);
+    sprite.setDepth(y);
+
+    const nameTag = this._makeNameTag(name);
+
+    this.remotePlayers.set(id, {
+      sprite,
+      nameTag,
+      targetX: x,
+      targetY: y,
+    });
+
+    console.log('[multiplayer] player joined:', id, name, color);
+  }
+
+  // Create a floating name tag text.
+  _makeNameTag(name) {
+    return this.add
+      .text(0, 0, name, {
+        fontFamily: 'Arial, sans-serif',
+        fontSize: '11px',
+        color: '#ffffff',
+        stroke: '#000000',
+        strokeThickness: 3,
+        resolution: 2,
+      })
+      .setOrigin(0.5, 1)
+      .setDepth(99999);
+  }
+
+  // ---- Obstacle helpers (unchanged) ----------------------------------------
   buildPlacements(T) {
     const rng = mulberry32(20260527);
     const placements = [];
-    const cell = T * 3; // spacing between candidate cells
-    const margin = T; // keep off the very edge
+    const cell = T * 3;
+    const margin = T;
     for (let y = margin + cell / 2; y < this.worldH - margin; y += cell) {
       for (let x = margin + cell / 2; x < this.worldW - margin; x += cell) {
-        // Skip ~40% of cells for open clearings.
         if (rng() < 0.4) continue;
         const jx = x + (rng() - 0.5) * cell * 0.7;
         const jy = y + (rng() - 0.5) * cell * 0.7;
@@ -126,12 +288,9 @@ export default class WorldScene extends Phaser.Scene {
 
   addTree(x, y) {
     const t = this.obstacles.create(x, y, 'tree');
-    // Texture origin is center; physics body covers only the trunk base so the
-    // player can walk "behind" the canopy.
     const w = this.meta.tree.w;
     const h = this.meta.tree.h;
     t.setOrigin(0.5, 0.5);
-    // Trunk base is roughly the bottom-center.
     const bw = 18;
     const bh = 14;
     t.body.setSize(bw, bh);
@@ -153,15 +312,11 @@ export default class WorldScene extends Phaser.Scene {
     r.refreshBody();
   }
 
-  // Find an open spot near center with no obstacle within a clearance radius.
   findClearSpawn(placements, T) {
     const cx = this.worldW / 2;
     const cy = this.worldH / 2;
     const clearance = T * 1.5;
-    const candidates = [
-      { x: cx, y: cy },
-    ];
-    // Spiral outward candidate offsets.
+    const candidates = [{ x: cx, y: cy }];
     for (let r = 1; r <= 8; r++) {
       for (const a of [0, 90, 180, 270, 45, 135, 225, 315]) {
         const rad = (a * Math.PI) / 180;
@@ -185,7 +340,8 @@ export default class WorldScene extends Phaser.Scene {
     return { x: cx, y: cy };
   }
 
-  update() {
+  // ---- Update loop ---------------------------------------------------------
+  update(time) {
     const k = this.keys;
     const body = this.player.body;
 
@@ -195,14 +351,11 @@ export default class WorldScene extends Phaser.Scene {
     if (k.right.isDown) vx += 1;
     if (k.up.isDown) vy -= 1;
     if (k.down.isDown) vy += 1;
-    // Opposing keys (e.g. A+D) sum to 0 above -> no net movement, no jitter.
 
     if (vx !== 0 || vy !== 0) {
-      // Normalize so diagonals aren't faster than straight lines.
       const len = Math.hypot(vx, vy);
       body.setVelocity((vx / len) * PLAYER_SPEED, (vy / len) * PLAYER_SPEED);
 
-      // Pick facing texture from dominant axis.
       let dir = this.facing;
       if (Math.abs(vx) > Math.abs(vy)) {
         dir = vx < 0 ? 'left' : 'right';
@@ -212,13 +365,48 @@ export default class WorldScene extends Phaser.Scene {
       if (dir !== this.facing) {
         this.facing = dir;
         this.player.setTexture('player-' + dir);
+        // Re-apply tint after texture change.
+        if (this._selfColor) {
+          this.player.setTint(
+            Phaser.Display.Color.HexStringToColor(this._selfColor).color
+          );
+        }
       }
     } else {
       body.setVelocity(0, 0);
     }
 
-    // Keep player depth-sorted against obstacles as it moves.
     this.player.setDepth(this.player.y);
+
+    // Emit position at ~20Hz while connected.
+    if (this._socket && this._socket.connected) {
+      if (time - this._lastEmitTime >= MOVE_EMIT_INTERVAL) {
+        this._lastEmitTime = time;
+        this._socket.emit('player:move', {
+          x: this.player.x,
+          y: this.player.y,
+        });
+      }
+    }
+
+    // Local player name tag follows the sprite.
+    if (this._selfNameTag) {
+      this._selfNameTag.setPosition(
+        this.player.x,
+        this.player.y - this.meta.player.size / 2 - 4
+      );
+    }
+
+    // Update remote players: lerp toward target + update name tags.
+    for (const [, rp] of this.remotePlayers) {
+      rp.sprite.x = Phaser.Math.Linear(rp.sprite.x, rp.targetX, LERP_ALPHA);
+      rp.sprite.y = Phaser.Math.Linear(rp.sprite.y, rp.targetY, LERP_ALPHA);
+      rp.sprite.setDepth(rp.sprite.y);
+      rp.nameTag.setPosition(
+        rp.sprite.x,
+        rp.sprite.y - this.meta.player.size / 2 - 4
+      );
+    }
   }
 }
 
