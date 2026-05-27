@@ -3,6 +3,9 @@ import http from 'http';
 
 const PORT = 7979;
 
+// Character name — set via CHARACTER_NAME env var or defaults to 'Wolf'.
+const CHARACTER_NAME = process.env.CHARACTER_NAME || 'Wolf';
+
 // Maps shorthand key names to Playwright key codes.
 // Single lowercase letters map to their KeyX code; anything else is passed through as-is
 // (e.g. "ArrowUp", "Space", "Enter", "Escape", "ShiftLeft" all work directly).
@@ -20,7 +23,8 @@ async function init() {
   const context = await browser.newContext();
   page = await context.newPage();
 
-  await page.goto('https://yoakshat.github.io/living-game/');
+  const gameUrl = `https://yoakshat.github.io/living-game/?characterName=${encodeURIComponent(CHARACTER_NAME)}`;
+  await page.goto(gameUrl);
   await page.waitForSelector('canvas', { timeout: 15000 });
 
   // Wait extra 2 seconds for Phaser to fully initialize
@@ -30,6 +34,7 @@ async function init() {
   const canvas = await page.$('canvas');
   await canvas.click();
 
+  console.log(`Character: ${CHARACTER_NAME}`);
   console.log('Game loaded — canvas is active');
 }
 
