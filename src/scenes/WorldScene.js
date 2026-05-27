@@ -147,6 +147,10 @@ export default class WorldScene extends Phaser.Scene {
 
     socket.on('connect', () => {
       console.log('[multiplayer] connected:', socket.id);
+      // Send character name (from URL param) so the server can use it as the display name.
+      const params = new URLSearchParams(window.location.search);
+      const characterName = params.get('characterName') || '';
+      socket.emit('player:identify', { name: characterName });
       // Emit our spawn position so the server state is accurate immediately.
       socket.emit('player:move', { x: this.player.x, y: this.player.y });
     });
@@ -173,6 +177,11 @@ export default class WorldScene extends Phaser.Scene {
     // A player disconnected.
     socket.on('player:left', (data) => {
       this._enqueue(() => this._onPlayerLeft(data));
+    });
+
+    // A player's name was updated (after player:identify).
+    socket.on('player:renamed', (data) => {
+      this._enqueue(() => this._onPlayerRenamed(data));
     });
 
     socket.on('disconnect', (reason) => {
@@ -226,6 +235,22 @@ export default class WorldScene extends Phaser.Scene {
     rp.nameTag.destroy();
     this.remotePlayers.delete(data.id);
     console.log('[multiplayer] player left:', data.id);
+  }
+
+  _onPlayerRenamed(data) {
+    const { id, name } = data;
+    // Update local player name tag if this is us.
+    if (id === this._selfId) {
+      this._selfName = name;
+      if (this._selfNameTag) {
+        this._selfNameTag.setText(name);
+      }
+      return;
+    }
+    // Update remote player name tag.
+    const rp = this.remotePlayers.get(id);
+    if (!rp) return;
+    rp.nameTag.setText(name);
   }
 
   // Create a remote player sprite + name tag and add to the map.
