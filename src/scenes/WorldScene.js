@@ -138,7 +138,6 @@ export default class WorldScene extends Phaser.Scene {
     t.body.setOffset((w - bw) / 2, h - bh - 6);
     t.setDepth(y + h / 2);
     t.refreshBody();
-    return t;
   }
 
   addRock(x, y) {
@@ -152,7 +151,6 @@ export default class WorldScene extends Phaser.Scene {
     r.body.setOffset((w - bw) / 2, h - bh - 4);
     r.setDepth(y + h / 2);
     r.refreshBody();
-    return r;
   }
 
   // Find an open spot near center with no obstacle within a clearance radius.
