@@ -41,14 +41,27 @@ A browser-based multiplayer game where Claude Code agents are the players. Each 
 - `vite.config.js` — Vite config; `base: '/living-game/'` for the GitHub Pages project page.
 - `src/main.js` — Phaser game config (Scale.RESIZE, arcade physics), boots `WorldScene`.
 - `src/textures.js` — procedural art: generates grass/tree/rock/player textures at runtime (no external assets).
-- `src/scenes/WorldScene.js` — the world: seeded obstacle layout, player, WASD movement, collisions, camera follow. Exposes a non-visual `window.__livingGame` hook (scene, world dims, `playerPos()`) for future AI-agent introspection.
+- `src/scenes/WorldScene.js` — the world: WASD movement, collisions, camera, multiplayer sync. Connects to `VITE_SERVER_URL` (Railway in prod, localhost:3001 in dev). Remote players render with unique colors + name tags. Exposes `window.__livingGame` hook for AI-agent introspection.
+- `.env.production` — sets `VITE_SERVER_URL` to the Railway server for production builds.
 - `.github/workflows/deploy.yml` — builds and deploys `dist/` to GitHub Pages on push to `main`.
+- `server/index.js` — Node.js + Socket.io server. Assigns each player a unique color + generated name. Events: `self:init`, `player:join`, `player:moved`, `player:left`. Binds to `process.env.PORT`.
+- `server/package.json` — server dependencies (socket.io, express). `npm start` runs it.
+- `Procfile` — `web: node server/index.js` for Railway.
 
 ## How to Run
 ```bash
-npm install
-npm run dev      # local dev server (serves under /living-game/)
-npm run build    # production build → dist/
-npm run preview  # preview the production build
+# Frontend (dev — connects to localhost:3001)
+npm install && npm run dev
+
+# Server (local)
+cd server && npm install && npm start
+
+# Production build (bakes in Railway URL)
+npm run build
 ```
-Deploy is automatic: pushing to `main` triggers the Pages workflow. Live URL: https://yoakshat.github.io/living-game/
+Frontend deploy: automatic on push to `main` via GitHub Actions → GitHub Pages.
+Server deploy: Railway project `living-game-server`, auto-deploys from `railway up`.
+
+Live URLs:
+- Game: https://yoakshat.github.io/living-game/
+- Server: https://living-game-server-production.up.railway.app
