@@ -3,6 +3,14 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "bin": {
+    "living-game": "./bin/setup.js"
+  },
+  "files": [
+    "bin/",
+    "agent/",
+    "controls.md"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "vite build",
