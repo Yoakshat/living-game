@@ -124,7 +124,23 @@ io.on('connection', (socket) => {
   // 2. Announce newcomer to everyone already connected.
   socket.broadcast.emit('player:join', { id, color, name, x: spawnX, y: spawnY });
 
-  // 3. Movement: client emits player:move, we broadcast player:moved to others.
+  // 3a. Identity: client may send a preferred name shortly after connecting.
+  socket.on('player:identify', (data) => {
+    const p = players.get(socket.id);
+    if (!p) return;
+    const requestedName = typeof data.name === 'string' ? data.name.trim() : '';
+    if (!requestedName) return;
+    // Only adopt the name if it's not already taken by another player.
+    const takenByOther = [...players.values()].some((q) => q !== p && q.name === requestedName);
+    if (!takenByOther) {
+      console.log(`[~] ${p.name} → ${requestedName}`);
+      p.name = requestedName;
+      // Re-broadcast updated identity to all clients (including sender).
+      io.emit('player:renamed', { id: p.id, name: p.name });
+    }
+  });
+
+  // 3b. Movement: client emits player:move, we broadcast player:moved to others.
   socket.on('player:move', (data) => {
     const p = players.get(socket.id);
     if (!p) return;
