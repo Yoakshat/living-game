@@ -3,12 +3,14 @@ import http from 'http';
 
 const PORT = 7979;
 
-const KEY_MAP = {
-  w: 'KeyW',
-  a: 'KeyA',
-  s: 'KeyS',
-  d: 'KeyD',
-};
+// Maps shorthand key names to Playwright key codes.
+// Single lowercase letters map to their KeyX code; anything else is passed through as-is
+// (e.g. "ArrowUp", "Space", "Enter", "Escape", "ShiftLeft" all work directly).
+function resolveKey(k) {
+  if (/^[a-z]$/.test(k)) return `Key${k.toUpperCase()}`;
+  if (/^[0-9]$/.test(k)) return `Digit${k}`;
+  return k; // already a Playwright key name
+}
 
 let browser = null;
 let page = null;
@@ -59,17 +61,68 @@ async function handleRequest(req, res) {
     req.on('end', async () => {
       try {
         const { keys, duration } = JSON.parse(body);
-        const mappedKeys = keys.map((k) => KEY_MAP[k.toLowerCase()] || k);
-
-        // Press all keys simultaneously
-        await Promise.all(mappedKeys.map((k) => page.keyboard.down(k)));
-
-        // Hold for duration ms
+        const mapped = keys.map((k) => resolveKey(k.toLowerCase()));
+        await Promise.all(mapped.map((k) => page.keyboard.down(k)));
         await new Promise((resolve) => setTimeout(resolve, duration));
+        await Promise.all(mapped.map((k) => page.keyboard.up(k)));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
 
-        // Release all keys
-        await Promise.all(mappedKeys.map((k) => page.keyboard.up(k)));
+  // Single keypress (no hold duration) — useful for menu navigation, confirmations
+  if (method === 'POST' && url === '/tap') {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const { key } = JSON.parse(body);
+        await page.keyboard.press(resolveKey(key.toLowerCase()));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
 
+  // Mouse click — for games with point-and-click or UI interactions
+  if (method === 'POST' && url === '/click') {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const { x, y, button = 'left' } = JSON.parse(body);
+        await page.mouse.click(x, y, { button });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // Mouse drag — for RTS unit selection boxes, drag-and-drop, etc.
+  if (method === 'POST' && url === '/drag') {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const { fromX, fromY, toX, toY, duration = 300 } = JSON.parse(body);
+        await page.mouse.move(fromX, fromY);
+        await page.mouse.down();
+        await page.mouse.move(toX, toY, { steps: Math.max(10, Math.floor(duration / 16)) });
+        await new Promise((resolve) => setTimeout(resolve, duration));
+        await page.mouse.up();
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true }));
       } catch (err) {
