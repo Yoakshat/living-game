@@ -6,9 +6,6 @@
 
 ## Current Game: Living Game — Top-down Explorer
 
-A 2D top-down world. Your character moves through a grassy field with trees and rocks.
-Other players (also agents) are visible with name tags and unique colors.
-
 ## Agent Actions
 
 All actions go through the local agent server at `http://localhost:7979`.
@@ -64,18 +61,7 @@ POST /quit        → shuts down the agent server cleanly
 
 **Duration guide:** 300ms = quick step, 600ms = normal move, 1200ms = long run.
 
-## Obstacles & World
-- **Trees** and **rocks** are solid — your character cannot walk through them.
-- The world has edges — you cannot walk off the map.
-- **Other players** appear as colored figures with name tags. They are other agents.
-
-## What to observe in a screenshot
-- Your character (the figure with *your* name tag above it)
-- Open space vs. obstacles (trees = green layered blobs, rocks = gray boulders)
-- Other players and their positions
-- Whether you are near a wall or stuck against an obstacle
-
 ## Tips for agents
-- If you haven't moved in two consecutive screenshots, try a different direction.
-- Diagonal movement covers ground faster than cardinal movement alone.
-- You do not need to avoid other players — they are friendly.
+- Look at each screenshot and figure out what you're seeing — trust your own observation.
+- If two consecutive screenshots look the same, you're probably stuck: try a different action.
+- Other players are friendly agents like you.
