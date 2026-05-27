@@ -1,190 +1,147 @@
-# Acceptance: multiplayer-server
+# Acceptance: agent-loop
 
-Locked definition of done for real-time multiplayer position sync. Scope is a
-Node.js + Socket.io server that broadcasts player positions so every connected
-browser client sees every other player moving. No game mechanics beyond
-movement and identity (color + name tag).
+Locked definition of done for the autonomous agent loop. Scope is a Node.js
+script that drives a real browser via Playwright, feeds screenshots to Claude,
+and executes the resulting movement decisions in-game — indefinitely, without
+human input.
 
-The defining constraint: two browser tabs open to the same game URL must show
-each other's characters moving in real-time. A screenshot showing both players
-must make it immediately obvious there are two distinct people in the world.
-
----
-
-## 1. Connection flow
-
-### New player joins
-- Opening the game URL causes the client to connect to the Socket.io server
-  automatically — no manual action required.
-- The server assigns the new client:
-  - A unique player ID (UUID or similar).
-  - A unique color not currently in use by any other connected player.
-  - A generated display name (e.g., "Player_4A2" or similar short identifier).
-- The server sends the new client the full current state: all already-connected
-  players with their IDs, colors, names, and current x/y positions.
-- The new client renders all existing players at their correct current positions
-  before the player takes any action.
-- The server broadcasts a `player:joined` (or equivalent) event to all existing
-  clients so the newcomer's character appears in their world immediately —
-  no page refresh required.
-- The entire join flow (connect → assign → render) completes within 2 seconds
-  on localhost.
-
-### Existing clients see the newcomer
-- When a second tab opens, the first tab's game world gains a new character at
-  the newcomer's spawn position.
-- The new character is rendered with the server-assigned color and name tag
-  visible above their sprite.
+The defining constraint: a single agent must open the live game, read its own
+`character.md`, and wander the world for 5 full minutes without crashing,
+hanging, or requiring any human action.
 
 ---
 
-## 2. Movement sync
+## 1. Setup & startup
 
-- When a local player presses WASD/arrow keys, their own character moves
-  immediately (client-side, no server round-trip required).
-- The client emits a position update event to the server after each movement
-  step (or on a regular tick while moving).
-- The server broadcasts the position update to all other connected clients.
-- Other clients update the moving character's position upon receiving the event.
-- **Latency**: on localhost, a remote player's position update is reflected on
-  other clients within 200ms.
-- **Smoothness**: remote character movement must be visually smooth — no
-  snapping/teleporting between discrete positions. Interpolation or frequent
-  enough update rate must make movement look fluid at normal walking speed.
-- Two players moving simultaneously must both see each other's updates — no
-  dropped events when multiple players emit at the same time.
-
----
-
-## 3. Player identity
-
-- Each connected player is rendered with a visually distinct color sprite tint
-  (or color overlay) matching their server-assigned color.
-- No two simultaneously connected players share the same color.
-- A name tag (text label) floats above each player's character at all times,
-  including remote players.
-- The local player's own name tag is also visible.
-- **Screenshot legibility**: in a screenshot capturing two connected players,
-  a viewer with no prior context must be able to:
-  - Identify that there are two distinct characters (different colors).
-  - Read both name tags without zooming in.
-  - Distinguish which character is which player.
+- `ANTHROPIC_API_KEY` env var is required. If missing, the agent exits
+  immediately with a clear, human-readable error message — no stack trace,
+  just "ANTHROPIC_API_KEY is not set. Export it and try again."
+- `character.md` is read from the agent directory at startup. A default
+  template ships with the repo so the agent works out of the box without any
+  user editing.
+- `npm install` inside the `agent/` directory installs all dependencies with
+  no manual steps beyond that.
+- Agent starts with `node agent/agent.js` OR `npm start` from within `agent/`.
+- A `~/.claude/commands/start.md` slash-command file exists so Claude Code
+  users can type `/start` to launch the agent without knowing the exact
+  command.
+- The agent opens `https://yoakshat.github.io/living-game/` and waits until
+  the game world is visibly rendered (Phaser canvas present, not a
+  blank/loading screen) before the first decision cycle begins.
 
 ---
 
-## 4. Disconnect / cleanup
+## 2. Decision loop
 
-- When a player closes their tab or loses connection, the server detects the
-  disconnect (Socket.io's disconnect event).
-- The server broadcasts a `player:left` (or equivalent) event to all remaining
-  clients within 2 seconds of the disconnect.
-- All remaining clients immediately remove the disconnected player's character
-  from their game world — no ghost characters persist.
-- The disconnected player's assigned color is freed and may be reassigned to
-  future players.
-- After a disconnect, the remaining clients' game state is clean — no orphaned
-  sprites, no error state, no crashes.
+Each cycle executes in order:
 
----
-
-## 5. Scale
-
-- The server handles at least 10 simultaneous Socket.io connections without
-  crashing, hanging, or dropping movement events.
-- Repeated connect/disconnect cycles (e.g., a client reconnecting multiple
-  times rapidly) do not cause accumulating ghost state on the server.
-- No memory leak observable from the server process during a session with
-  multiple players joining and leaving.
+1. **Screenshot** — captures the current game viewport.
+2. **API call** — sends the screenshot plus the full contents of `character.md`
+   to Claude (model: `claude-haiku-4-5`) with a system prompt that instructs
+   it to return a structured action.
+3. **Parse** — extracts a structured action from the response:
+   - `keys`: array of WASD keys to hold simultaneously (e.g. `["w", "d"]`)
+   - `duration`: milliseconds to hold those keys (e.g. `800`)
+   - `reason` (optional): short string explaining the decision
+4. **Execute** — holds the specified keys for the specified duration via
+   Playwright, then releases all keys.
+5. **Log** — prints a single line: timestamp, keys, duration, reason.
+6. Repeat immediately (target: ≤ 3 seconds total per cycle under normal
+   network conditions).
 
 ---
 
-## 6. Local development
+## 3. Claude response contract
 
-- The server starts with `npm start` or `node server.js` from the server
-  directory with no additional setup beyond `npm install`.
-- The server listens on port 3000 by default (or configurable via `PORT` env
-  var).
-- No build step is required to run the server locally.
-- The Phaser client connects to `http://localhost:3000` (or equivalent) when
-  running locally.
-- Two browser tabs opened to the local Phaser dev server connect to the local
-  game server and show each other's movement.
-
----
-
-## 7. Railway deployment
-
-- The server deploys to Railway free tier without code changes — only
-  environment variable configuration.
-- Railway provides the `PORT` env var automatically; the server must use it.
-- The Phaser client reads the server URL from a build-time or runtime config
-  (e.g., `VITE_SERVER_URL` env var) so it can target either localhost or the
-  Railway URL by changing one value.
-- The Railway-deployed server accepts WebSocket connections from the GitHub
-  Pages frontend (`https://yoakshat.github.io`) — CORS is configured to allow
-  this origin.
-- Two browser tabs opened to the GitHub Pages URL connect to the Railway server
-  and show each other's movement live.
+- Claude must return a JSON object (inline in the response or wrapped in a
+  code block) containing at minimum `keys` and `duration`.
+- If the response is missing, malformed, or unparseable, the agent logs a
+  `[WARN]` line and skips to the next cycle — it does not throw or exit.
+- If the API call fails (network error, rate limit, timeout), the agent logs
+  an `[ERROR]` line, waits one cycle interval, and continues — it does not
+  exit.
+- The `reason` field, when present, must reflect what was visible on screen
+  (e.g., "open field ahead, heading north-east") not generic filler — this is
+  enforced by the system prompt.
 
 ---
 
-## 8. Edge cases
+## 4. Character context
 
-- **Simultaneous movement**: two or more players moving at exactly the same
-  time all see each other's position updates — no starvation or dropped events
-  under concurrent load.
-- **Join mid-game**: a player who connects while others are actively moving
-  sees those players at their correct current positions, not at a stale spawn
-  position.
-- **Rapid connect/disconnect**: a client that connects and immediately
-  disconnects leaves no ghost state on the server or on other clients.
-- **Two tabs same browser**: two tabs in the same browser are treated as two
-  independent players — each receives a separate ID and color.
-- **Server restart**: after the server restarts, Socket.io's default reconnect
-  behavior causes clients to attempt reconnection automatically. Once
-  reconnected, the server re-sends the full player state so clients
-  re-synchronize without a manual page refresh.
-- **Late-join spawn**: a newly joined player spawns at a valid in-world
-  position (not (0,0) if that is off-map or inside an obstacle). The spawn
-  position is visible to the joining player and to existing players.
+- The full text of `character.md` is included in every Claude API call.
+- The default `character.md` template includes: character name, personality
+  adjectives, movement tendencies, and goals.
+- Players can edit `character.md` to customize; the agent picks up changes on
+  the next run (not hot-reloaded mid-run).
+- Movement decisions must feel distinct from a character with a different
+  `character.md` — a cautious character should hug walls; an explorer should
+  seek new terrain.
 
 ---
 
-## 9. Definition of done — tester checklist
+## 5. Observable movement behavior
 
-A tester verifies each as pass/fail:
-
-- [ ] Server starts locally with `npm start` or `node server.js` and no errors.
-- [ ] Two browser tabs opened to the local game both connect successfully
-      (console shows connected, server logs two connections).
-- [ ] Each tab shows two characters: the local player and the remote player.
-- [ ] The two characters have visibly different colors.
-- [ ] Both characters have readable name tags above their sprites.
-- [ ] Moving WASD in Tab A causes the corresponding character to move in Tab B
-      within 200ms on localhost, with smooth interpolation (no teleporting).
-- [ ] Moving in both tabs simultaneously works — both tabs reflect both players
-      moving at once.
-- [ ] Closing Tab A causes the character to disappear from Tab B within 2 seconds.
-      No ghost character remains.
-- [ ] A third tab joining mid-session sees both existing players at their current
-      positions; both existing tabs gain the new player's character.
-- [ ] A screenshot of two active players shows two distinct colored characters
-      with two readable name tags — a viewer can immediately tell there are two
-      different players.
-- [ ] Server handles 10 simultaneous connections without crashing.
-- [ ] Server deploys to Railway; two tabs opened to the GitHub Pages URL connect
-      to Railway and show each other's movement live.
-- [ ] Switching from localhost to Railway URL requires only changing one config
-      value (env var or config constant).
+- The agent's character appears in the game world and its position changes
+  visibly over time — it does not stand still.
+- Over a 5-minute unattended run the character travels in at least 3 distinct
+  compass directions (logged keys confirm this — not just "w" every cycle).
+- The agent does not get permanently stuck walking into a wall for more than
+  ~10 seconds — it must eventually change direction.
+- Movement decisions are informed by screen content: the `reason` field in
+  logs references visible features (terrain, obstacles, other players) not
+  generic phrases.
 
 ---
 
-## Out of scope (do NOT implement here)
+## 6. Robustness
 
-- Inventory, items, combat, NPCs, or any game mechanics beyond walking.
-- Chat or messaging between players.
-- Authentication or persistent player accounts.
-- Anti-cheat or server-side position validation / authority.
-- Mobile / touch input support.
-- Any changes to the existing WASD movement, collision, or camera behavior from
-  the game-scaffold task.
+- If Playwright loses the page (navigation error, page crash, detached frame),
+  the agent attempts `page.reload()` once before giving up on that cycle and
+  continuing the loop.
+- Ctrl+C (SIGINT) stops the agent cleanly: keys are released, the browser
+  closes, and no zombie Chromium processes remain.
+- The agent runs for a full 5 minutes in a real test without crashing,
+  hanging, or exiting on its own.
+
+---
+
+## 7. Logging format
+
+Each cycle produces exactly one log line (plus warn/error lines when needed):
+
+```
+[HH:MM:SS] keys=["w","d"] duration=900ms reason="heading toward clearing"
+[WARN] Unparseable Claude response, skipping cycle
+[ERROR] API call failed: fetch timeout, retrying next cycle
+```
+
+---
+
+## 8. Definition of done — tester checklist
+
+- [ ] `node agent/agent.js` with no `ANTHROPIC_API_KEY` exits with a clear
+      error message, not a stack trace.
+- [ ] `node agent/agent.js` with a valid key opens the browser, loads the
+      game, and starts the loop without any human interaction.
+- [ ] First screenshot is taken only after the game canvas is visible
+      (verified by log timestamp vs. page load time).
+- [ ] Every cycle produces a log line with keys, duration, and reason.
+- [ ] Agent runs for 5 full minutes without crashing or requiring input.
+- [ ] Over the 5-minute run, logs show at least 3 distinct directions of
+      movement (keys vary — not all "w" or all one combination).
+- [ ] Injecting a malformed Claude response (by temporarily breaking the
+      prompt) produces a `[WARN]` log line and the loop continues.
+- [ ] Pressing Ctrl+C stops the agent; no Chromium process remains in `ps`.
+- [ ] `/start` in Claude Code runs the agent (verifiable by checking
+      `~/.claude/commands/start.md` exists and contains the correct command).
+- [ ] A watcher observing the live game URL sees the agent's character moving
+      around the world during the 5-minute run.
+
+---
+
+## Out of scope
+
+- Voting, inventory, combat, PR creation, multi-agent coordination.
+- Hot-reloading `character.md` mid-run.
+- Server-side validation of agent actions.
+- Any UI for the agent — it is a headless CLI process.

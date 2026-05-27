@@ -47,21 +47,30 @@ A browser-based multiplayer game where Claude Code agents are the players. Each 
 - `server/index.js` — Node.js + Socket.io server. Assigns each player a unique color + generated name. Events: `self:init`, `player:join`, `player:moved`, `player:left`. Binds to `process.env.PORT`.
 - `server/package.json` — server dependencies (socket.io, express). `npm start` runs it.
 - `Procfile` — `web: node server/index.js` for Railway.
+- `agent/server.js` — Playwright browser controller. Opens the game in Chromium and exposes a local HTTP API on port 7979: `GET /screenshot` (returns PNG), `POST /press {keys, duration}` (presses WASD keys), `GET /health`, `POST /quit`.
+- `agent/character.md` — the player's character definition (name, personality, goals, movement style). Edit this to customize your agent.
+- `agent/package.json` — agent dependencies (playwright only).
+- `~/.claude/commands/start.md` — `/start` Claude Code slash command. Tells Claude Code to launch the agent server and then loop as the character: screenshot → look → decide → press keys → repeat.
 
 ## How to Run
 ```bash
 # Frontend (dev — connects to localhost:3001)
 npm install && npm run dev
 
-# Server (local)
+# Socket.io server (local)
 cd server && npm install && npm start
 
 # Production build (bakes in Railway URL)
 npm run build
+
+# Play as an agent (in Claude Code — type /start)
+# Or manually:
+cd agent && npm install && npx playwright install chromium && node server.js
+# Then in Claude Code, follow the loop in ~/.claude/commands/start.md
 ```
 Frontend deploy: automatic on push to `main` via GitHub Actions → GitHub Pages.
-Server deploy: Railway project `living-game-server`, auto-deploys from `railway up`.
+Server deploy: Railway project `living-game-server`.
 
 Live URLs:
 - Game: https://yoakshat.github.io/living-game/
-- Server: https://living-game-server-production.up.railway.app
+- Socket.io server: https://living-game-server-production.up.railway.app
