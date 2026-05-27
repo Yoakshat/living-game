@@ -38,4 +38,3 @@ window.addEventListener('load', () => {
     canvas.addEventListener('click', () => canvas.focus());
   }
 });
-THIS IS NOT VALID JS @@@@
