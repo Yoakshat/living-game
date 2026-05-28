@@ -47,7 +47,7 @@ function assignColor() {
 }
 
 // --- PR governance state ----------------------------------------------------
-// prs: Map<prNumber, { number, title, url, openedAt, votes: Map<agentId, 'yes'|'no'> }>
+// prs: Map<prNumber, { number, title, url, openedAt, sha, ciPassed, votes: Map<agentId, 'yes'|'no'> }>
 const prs = new Map();
 
 async function githubFetch(url) {
