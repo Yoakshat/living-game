@@ -38,11 +38,10 @@ jobs:
           QUORUM=$(echo "$TALLY" | jq '[(.activeAgents * 0.05 | ceil), 1] | max')
           echo "Active agents: $ACTIVE — quorum needed: $QUORUM"
 
+          SERVER_URL="https://living-game-server-production.up.railway.app"
+
           echo "$TALLY" | jq -c '.prs[]' | while read -r PR; do
             NUMBER=$(echo "$PR" | jq '.number')
-            YES=$(echo "$PR" | jq '.yesVotes')
-            NO=$(echo "$PR" | jq '.noVotes')
-            TOTAL=$(echo "$PR" | jq '.totalVotes')
             OPENED_AT=$(echo "$PR" | jq -r '.openedAt')
 
             # Skip PRs that are already closed/merged on GitHub
@@ -51,7 +50,57 @@ jobs:
               continue
             fi
 
-            # Check CI status
+            # --- Stale branch detection ---
+            # Sync the current head SHA with the server. If it changed, the server
+            # wipes all votes for this PR and re-notifies agents to vote again.
+            CURRENT_SHA=$(gh pr view "$NUMBER" --repo Yoakshat/living-game --json headRefOid -q '.headRefOid' 2>/dev/null || echo '')
+            if [ -n "$CURRENT_SHA" ]; then
+              SYNC_RESULT=$(curl -sf -X POST "$SERVER_URL/sync-pr" \
+                -H 'Content-Type: application/json' \
+                -d "{\"prNumber\": $NUMBER, \"sha\": \"$CURRENT_SHA\"}" || echo '{}')
+              WIPED=$(echo "$SYNC_RESULT" | jq -r '.wiped // false')
+              if [ "$WIPED" = "true" ]; then
+                echo "PR #$NUMBER: SHA changed to ${CURRENT_SHA:0:7} — votes wiped, agents re-notified"
+              fi
+            fi
+
+            # Re-fetch fresh vote counts after sync (votes may have been wiped above)
+            FRESH_TALLY=$(curl -sf "$SERVER_URL/vote-tally" || echo '')
+            if [ -z "$FRESH_TALLY" ]; then
+              echo "PR #$NUMBER: server unreachable after sync — skipping"
+              continue
+            fi
+            FRESH_PR=$(echo "$FRESH_TALLY" | jq -c --argjson num "$NUMBER" '.prs[] | select(.number == $num)' 2>/dev/null || echo '')
+            if [ -z "$FRESH_PR" ]; then
+              echo "PR #$NUMBER: not found in fresh tally — skipping"
+              continue
+            fi
+            YES=$(echo "$FRESH_PR" | jq '.yesVotes')
+            NO=$(echo "$FRESH_PR" | jq '.noVotes')
+            TOTAL=$(echo "$FRESH_PR" | jq '.totalVotes')
+
+            # --- Merge conflict check ---
+            # CONFLICTING: block merge, post a comment once, and skip.
+            # null/empty: GitHub is still computing — skip this cycle.
+            MERGEABLE=$(gh pr view "$NUMBER" --repo Yoakshat/living-game --json mergeable -q '.mergeable' 2>/dev/null || echo '')
+
+            if [ "$MERGEABLE" = "CONFLICTING" ]; then
+              echo "PR #$NUMBER: branch has conflicts — skipping merge"
+              EXISTING=$(gh pr view "$NUMBER" --repo Yoakshat/living-game --json comments \
+                -q '[.comments[] | select(.body | contains("branch has conflicts"))] | length' 2>/dev/null || echo '0')
+              if [ "$EXISTING" = "0" ]; then
+                gh pr comment "$NUMBER" --repo Yoakshat/living-game \
+                  --body "branch has conflicts — update and push to restart voting." || true
+              fi
+              continue
+            fi
+
+            if [ "$MERGEABLE" = "null" ] || [ -z "$MERGEABLE" ]; then
+              echo "PR #$NUMBER: mergeable status unknown (still computing) — skipping this cycle"
+              continue
+            fi
+
+            # --- CI check ---
             CI=$(gh pr view "$NUMBER" --repo Yoakshat/living-game --json statusCheckRollup -q '
               if (.statusCheckRollup | length) == 0 then "pending"
               elif [.statusCheckRollup[].conclusion] | any(. == "FAILURE" or . == "TIMED_OUT" or . == "CANCELLED") then "failed"

@@ -47,7 +47,9 @@ function assignColor() {
 }
 
 // --- PR governance state ----------------------------------------------------
-// prs: Map<prNumber, { number, title, url, openedAt, sha, ciPassed, votes: Map<agentId, 'yes'|'no'> }>
+// prs: Map<prNumber, { number, title, url, openedAt, sha, currentSha, ciPassed, votes: Map<agentId, 'yes'|'no'> }>
+// sha         = SHA at the time we first tracked the PR (used for CI checks)
+// currentSha  = latest SHA the governance workflow has told us about via /sync-pr
 const prs = new Map();
 
 async function githubFetch(url) {
@@ -109,6 +111,7 @@ async function pollGitHub() {
         url: pr.html_url,
         openedAt: new Date(pr.created_at),
         sha: pr.head.sha,
+        currentSha: pr.head.sha,
         ciPassed: false,
         votes: new Map(),
       });
@@ -161,6 +164,8 @@ const io = new Server(server, {
   },
 });
 
+app.use(express.json());
+
 app.get('/', (_req, res) => res.json({ status: 'ok' }));
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
@@ -178,12 +183,37 @@ app.get('/vote-tally', (_req, res) => {
       title: pr.title,
       url: pr.url,
       openedAt: pr.openedAt,
+      currentSha: pr.currentSha,
       yesVotes: yes,
       noVotes: no,
       totalVotes: yes + no,
     };
   });
   res.json({ activeAgents, prs: tally });
+});
+
+// Called by governance workflow at the start of each poll cycle per PR.
+// If sha differs from currentSha, wipes all votes and re-notifies agents.
+app.post('/sync-pr', (req, res) => {
+  const { prNumber, sha } = req.body || {};
+  if (typeof prNumber !== 'number' || typeof sha !== 'string') {
+    return res.status(400).json({ error: 'prNumber (number) and sha (string) required' });
+  }
+  const pr = prs.get(prNumber);
+  if (!pr) {
+    return res.json({ status: 'unknown', wiped: false });
+  }
+  if (sha === pr.currentSha) {
+    return res.json({ status: 'unchanged', wiped: false });
+  }
+  // SHA changed — wipe votes and notify agents to re-vote
+  pr.votes.clear();
+  pr.currentSha = sha;
+  // If CI had already passed for the old SHA, re-gate until we confirm CI on new SHA
+  pr.ciPassed = false;
+  console.log(`[sync-pr] #${prNumber} SHA changed to ${sha.slice(0, 7)} — votes wiped, re-gating CI`);
+  io.emit('pr:revote', { prNumber, sha });
+  return res.json({ status: 'wiped', wiped: true });
 });
 
 // --- Socket.io events -------------------------------------------------------
