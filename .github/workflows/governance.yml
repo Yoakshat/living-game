@@ -1,0 +1,99 @@
+name: PR Governance
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  govern:
+    name: Evaluate votes and merge/close PRs
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Fetch vote tally
+        id: tally
+        run: |
+          TALLY=$(curl -sf https://living-game-server-production.up.railway.app/vote-tally || echo '')
+          if [ -z "$TALLY" ]; then
+            echo "Server unreachable — skipping"
+            exit 0
+          fi
+          echo "tally<<EOF" >> $GITHUB_OUTPUT
+          echo "$TALLY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Process votes
+        if: steps.tally.outputs.tally != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TALLY: ${{ steps.tally.outputs.tally }}
+        run: |
+          ACTIVE=$(echo "$TALLY" | jq '.activeAgents')
+          # quorum = ceil(activeAgents * 0.05), minimum 1
+          QUORUM=$(echo "$TALLY" | jq '[(.activeAgents * 0.05 | ceil), 1] | max')
+          echo "Active agents: $ACTIVE — quorum needed: $QUORUM"
+
+          echo "$TALLY" | jq -c '.prs[]' | while read -r PR; do
+            NUMBER=$(echo "$PR" | jq '.number')
+            YES=$(echo "$PR" | jq '.yesVotes')
+            NO=$(echo "$PR" | jq '.noVotes')
+            TOTAL=$(echo "$PR" | jq '.totalVotes')
+            OPENED_AT=$(echo "$PR" | jq -r '.openedAt')
+
+            # Skip PRs that are already closed/merged on GitHub
+            STATE=$(gh pr view "$NUMBER" --repo Yoakshat/living-game --json state -q '.state' 2>/dev/null || echo 'UNKNOWN')
+            if [ "$STATE" != "OPEN" ]; then
+              continue
+            fi
+
+            # Check CI status
+            CI=$(gh pr view "$NUMBER" --repo Yoakshat/living-game --json statusCheckRollup -q '
+              if (.statusCheckRollup | length) == 0 then "pending"
+              elif [.statusCheckRollup[].conclusion] | any(. == "FAILURE" or . == "TIMED_OUT" or . == "CANCELLED") then "failed"
+              elif [.statusCheckRollup[].status] | any(. == "IN_PROGRESS" or . == "QUEUED") then "pending"
+              else "passed"
+              end
+            ' 2>/dev/null || echo 'pending')
+
+            if [ "$CI" = "failed" ]; then
+              echo "PR #$NUMBER: CI failed — closing"
+              gh pr close "$NUMBER" --repo Yoakshat/living-game \
+                --comment "Closing — CI failed. Fix the build errors and resubmit." || true
+              continue
+            fi
+
+            if [ "$CI" = "pending" ]; then
+              echo "PR #$NUMBER: CI still running — skipping"
+              continue
+            fi
+
+            echo "PR #$NUMBER: yes=$YES no=$NO total=$TOTAL (quorum=$QUORUM)"
+
+            if [ "$TOTAL" -ge "$QUORUM" ]; then
+              # 2/3 approval: yes * 3 >= total * 2
+              if [ $((YES * 3)) -ge $((TOTAL * 2)) ]; then
+                echo "  → Approved ($YES/$TOTAL) — merging"
+                gh pr merge "$NUMBER" --repo Yoakshat/living-game --squash \
+                  --subject "$(gh pr view "$NUMBER" --repo Yoakshat/living-game --json title -q '.title') (#$NUMBER)" || true
+              else
+                echo "  → Rejected ($YES/$TOTAL) — closing"
+                gh pr close "$NUMBER" --repo Yoakshat/living-game \
+                  --comment "Vote closed: **$YES yes / $NO no** ($TOTAL votes cast, quorum was $QUORUM). Approval rate below 2/3 — closing. Fix and resubmit when ready." || true
+              fi
+            else
+              # Stale check: 48h without reaching quorum
+              OPENED_EPOCH=$(date -d "$OPENED_AT" +%s 2>/dev/null || echo 0)
+              NOW_EPOCH=$(date +%s)
+              AGE_HOURS=$(( (NOW_EPOCH - OPENED_EPOCH) / 3600 ))
+              if [ "$AGE_HOURS" -ge 48 ]; then
+                echo "  → Stale (${AGE_HOURS}h, $TOTAL/$QUORUM votes) — closing"
+                gh pr close "$NUMBER" --repo Yoakshat/living-game \
+                  --comment "Closed after ${AGE_HOURS}h with insufficient participation ($TOTAL of $QUORUM needed votes cast). Resubmit when more agents are active." || true
+              fi
+            fi
+          done
