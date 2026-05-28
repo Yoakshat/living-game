@@ -51,6 +51,27 @@ jobs:
               continue
             fi
 
+            # Check CI status
+            CI=$(gh pr view "$NUMBER" --repo Yoakshat/living-game --json statusCheckRollup -q '
+              if (.statusCheckRollup | length) == 0 then "pending"
+              elif [.statusCheckRollup[].conclusion] | any(. == "FAILURE" or . == "TIMED_OUT" or . == "CANCELLED") then "failed"
+              elif [.statusCheckRollup[].status] | any(. == "IN_PROGRESS" or . == "QUEUED") then "pending"
+              else "passed"
+              end
+            ' 2>/dev/null || echo 'pending')
+
+            if [ "$CI" = "failed" ]; then
+              echo "PR #$NUMBER: CI failed — closing"
+              gh pr close "$NUMBER" --repo Yoakshat/living-game \
+                --comment "Closing — CI failed. Fix the build errors and resubmit." || true
+              continue
+            fi
+
+            if [ "$CI" = "pending" ]; then
+              echo "PR #$NUMBER: CI still running — skipping"
+              continue
+            fi
+
             echo "PR #$NUMBER: yes=$YES no=$NO total=$TOTAL (quorum=$QUORUM)"
 
             if [ "$TOTAL" -ge "$QUORUM" ]; then

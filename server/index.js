@@ -47,23 +47,42 @@ function assignColor() {
 }
 
 // --- PR governance state ----------------------------------------------------
-// prs: Map<prNumber, { number, title, url, openedAt, votes: Map<agentId, 'yes'|'no'> }>
+// prs: Map<prNumber, { number, title, url, openedAt, sha, ciPassed, votes: Map<agentId, 'yes'|'no'> }>
 const prs = new Map();
+
+async function githubFetch(url) {
+  const headers = { 'User-Agent': 'living-game-server' };
+  if (process.env.GITHUB_TOKEN) {
+    headers['Authorization'] = `token ${process.env.GITHUB_TOKEN}`;
+  }
+  const res = await fetch(url, { headers });
+  if (!res.ok) return null;
+  return await res.json();
+}
 
 async function fetchOpenPRs() {
   try {
-    const headers = { 'User-Agent': 'living-game-server' };
-    if (process.env.GITHUB_TOKEN) {
-      headers['Authorization'] = `token ${process.env.GITHUB_TOKEN}`;
-    }
-    const res = await fetch(
-      'https://api.github.com/repos/Yoakshat/living-game/pulls?state=open&per_page=20',
-      { headers }
+    return await githubFetch(
+      'https://api.github.com/repos/Yoakshat/living-game/pulls?state=open&per_page=20'
     );
-    if (!res.ok) return null;
-    return await res.json();
   } catch {
     return null;
+  }
+}
+
+// Returns 'passed' | 'failed' | 'pending'
+async function getCIStatus(sha) {
+  try {
+    const data = await githubFetch(
+      `https://api.github.com/repos/Yoakshat/living-game/commits/${sha}/check-runs`
+    );
+    if (!data || data.total_count === 0) return 'pending';
+    const runs = data.check_runs;
+    if (runs.some((r) => ['failure', 'timed_out', 'cancelled'].includes(r.conclusion))) return 'failed';
+    if (runs.some((r) => r.status === 'in_progress' || r.status === 'queued')) return 'pending';
+    return 'passed';
+  } catch {
+    return 'pending';
   }
 }
 
@@ -81,7 +100,7 @@ async function pollGitHub() {
     }
   }
 
-  // Detect new PRs and notify all connected agents
+  // Detect new PRs; track them but only notify agents once CI passes
   for (const pr of openPRs) {
     if (!prs.has(pr.number)) {
       prs.set(pr.number, {
@@ -89,15 +108,28 @@ async function pollGitHub() {
         title: pr.title,
         url: pr.html_url,
         openedAt: new Date(pr.created_at),
+        sha: pr.head.sha,
+        ciPassed: false,
         votes: new Map(),
       });
-      console.log(`[PR] New #${pr.number}: ${pr.title}`);
-      // Notify every currently connected agent
+      console.log(`[PR] Tracking #${pr.number}: ${pr.title} (waiting for CI)`);
+    }
+  }
+
+  // Promote PRs to voting once CI passes
+  for (const pr of prs.values()) {
+    if (pr.ciPassed) continue;
+    const ci = await getCIStatus(pr.sha);
+    if (ci === 'passed') {
+      pr.ciPassed = true;
+      console.log(`[PR] #${pr.number} CI passed — notifying agents`);
       for (const [socketId] of players) {
         io.to(socketId).emit('pr:review_needed', [
-          { number: pr.number, title: pr.title, url: pr.html_url },
+          { number: pr.number, title: pr.title, url: pr.url },
         ]);
       }
+    } else if (ci === 'failed') {
+      console.log(`[PR] #${pr.number} CI failed — governance will close it`);
     }
   }
 }
@@ -181,9 +213,9 @@ io.on('connection', (socket) => {
   // Announce newcomer to others
   socket.broadcast.emit('player:join', { id, color, name, x: spawnX, y: spawnY });
 
-  // Send any open PRs this agent hasn't voted on yet
+  // Send CI-passed PRs this agent hasn't voted on yet
   const unvoted = [...prs.values()]
-    .filter((pr) => !pr.votes.has(id))
+    .filter((pr) => pr.ciPassed && !pr.votes.has(id))
     .map((pr) => ({ number: pr.number, title: pr.title, url: pr.url }));
   if (unvoted.length > 0) {
     socket.emit('pr:review_needed', unvoted);
