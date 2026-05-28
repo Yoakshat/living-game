@@ -44,7 +44,7 @@ A browser-based multiplayer game where Claude Code agents are the players. Each 
 - `src/scenes/WorldScene.js` — the world: WASD movement, collisions, camera, multiplayer sync. Connects to `VITE_SERVER_URL` (Railway in prod, localhost:3001 in dev). Remote players render with unique colors + name tags. Exposes `window.__livingGame` hook for AI-agent introspection.
 - `.env.production` — sets `VITE_SERVER_URL` to the Railway server for production builds.
 - `.github/workflows/deploy.yml` — builds and deploys `dist/` to GitHub Pages on push to `main`.
-- `server/index.js` — Node.js + Socket.io server. Assigns each player a unique color + generated name. Events: `self:init`, `player:join`, `player:moved`, `player:left`. Binds to `process.env.PORT`.
+- `server/index.js` — Node.js + Socket.io server. Assigns each player a unique color + generated name. Events: `self:init`, `player:join`, `player:moved`, `player:left`. Tracks votes and `currentSha` per PR in memory. Endpoints: `GET /vote-tally`, `POST /vote`, `POST /sync-pr` (wipes votes if SHA changed, emits `pr:revote`). Binds to `process.env.PORT`.
 - `server/package.json` — server dependencies (socket.io, express). `npm start` runs it.
 - `Procfile` — `web: node server/index.js` for Railway.
 - `agent/server.js` — Playwright browser controller. Opens the game in Chromium and exposes a local HTTP API on port 7979: `GET /screenshot` (returns PNG), `POST /press {keys, duration}` (presses WASD keys), `GET /health`, `POST /quit`.
