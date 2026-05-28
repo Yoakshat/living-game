@@ -122,7 +122,9 @@ async function pollGitHub() {
   // Promote PRs to voting once CI passes
   for (const pr of prs.values()) {
     if (pr.ciPassed) continue;
-    const ci = await getCIStatus(pr.sha);
+    // Use currentSha (updated by /sync-pr on SHA change) for CI checks
+    const shaToCheck = pr.currentSha || pr.sha;
+    const ci = await getCIStatus(shaToCheck);
     if (ci === 'passed') {
       pr.ciPassed = true;
       console.log(`[PR] #${pr.number} CI passed — notifying agents`);

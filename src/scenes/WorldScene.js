@@ -209,6 +209,18 @@ export default class WorldScene extends Phaser.Scene {
       });
     });
 
+    // Server notifies agents that a PR's SHA changed — all prior votes were wiped.
+    // Remove it from pending (in case it was already queued) then re-add it so
+    // the agent re-reviews the updated diff.
+    socket.on('pr:revote', ({ prNumber, sha }) => {
+      this._enqueue(() => {
+        this._pendingVotes = this._pendingVotes.filter((p) => p.number !== prNumber);
+        // Re-fetch the PR info from the tally so we have title/url.
+        // For now just log — the server will re-emit pr:review_needed once CI passes on the new SHA.
+        console.log(`[governance] PR #${prNumber} updated (SHA ${sha.slice(0, 7)}) — votes wiped, awaiting new CI green`);
+      });
+    });
+
     socket.on('disconnect', (reason) => {
       console.warn('[multiplayer] disconnected:', reason);
     });
