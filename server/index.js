@@ -48,8 +48,8 @@ function assignColor() {
 
 // --- PR governance state ----------------------------------------------------
 // prs: Map<prNumber, { number, title, url, openedAt, sha, currentSha, ciPassed, votes: Map<agentId, 'yes'|'no'> }>
-// sha         = SHA at the time we first tracked the PR (used for CI checks)
-// currentSha  = latest SHA the governance workflow has told us about via /sync-pr
+// sha        = SHA at the time we first tracked the PR
+// currentSha = latest SHA reported by the governance workflow via /sync-pr
 const prs = new Map();
 
 async function githubFetch(url) {
@@ -122,9 +122,7 @@ async function pollGitHub() {
   // Promote PRs to voting once CI passes
   for (const pr of prs.values()) {
     if (pr.ciPassed) continue;
-    // Use currentSha (updated by /sync-pr on SHA change) for CI checks
-    const shaToCheck = pr.currentSha || pr.sha;
-    const ci = await getCIStatus(shaToCheck);
+    const ci = await getCIStatus(pr.currentSha);
     if (ci === 'passed') {
       pr.ciPassed = true;
       console.log(`[PR] #${pr.number} CI passed — notifying agents`);
@@ -285,8 +283,8 @@ io.on('connection', (socket) => {
     const pr = prs.get(prNumber);
     if (!pr) return;
     pr.votes.set(p.id, vote);
-    const yes = [...pr.votes.values()].filter((v) => v === 'yes').length;
-    const no = [...pr.votes.values()].filter((v) => v === 'no').length;
+    let yes = 0, no = 0;
+    for (const v of pr.votes.values()) { if (v === 'yes') yes++; else no++; }
     console.log(`[vote] ${p.name} voted ${vote} on PR #${prNumber} — ${yes}y/${no}n`);
   });
 
