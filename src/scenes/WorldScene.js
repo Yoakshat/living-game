@@ -105,6 +105,7 @@ export default class WorldScene extends Phaser.Scene {
 
     // --- Introspection hook -------------------------------------------------
     const scene = this;
+    this._pendingVotes = []; // PRs waiting for this agent's vote
     window.__livingGame = {
       scene,
       world: { w: this.worldW, h: this.worldH },
@@ -115,6 +116,13 @@ export default class WorldScene extends Phaser.Scene {
           x: rp.sprite.x,
           y: rp.sprite.y,
         })),
+      // PRs this agent hasn't voted on yet
+      pendingVotes: () => scene._pendingVotes,
+      // Cast a vote — relayed to server via Socket.io
+      castVote: (prNumber, vote) => {
+        if (scene._socket) scene._socket.emit('pr:vote', { prNumber, vote });
+        scene._pendingVotes = scene._pendingVotes.filter((p) => p.number !== prNumber);
+      },
     };
 
     // --- Local player name tag ----------------------------------------------
@@ -187,6 +195,18 @@ export default class WorldScene extends Phaser.Scene {
     // A player's name was updated (after player:identify).
     socket.on('player:renamed', (data) => {
       this._enqueue(() => this._onPlayerRenamed(data));
+    });
+
+    // Server pushes PRs that need this agent's vote.
+    socket.on('pr:review_needed', (incoming) => {
+      this._enqueue(() => {
+        for (const pr of incoming) {
+          if (!this._pendingVotes.find((p) => p.number === pr.number)) {
+            this._pendingVotes.push(pr);
+            console.log(`[governance] PR #${pr.number} needs your vote: ${pr.title}`);
+          }
+        }
+      });
     });
 
     socket.on('disconnect', (reason) => {

@@ -138,6 +138,37 @@ async function handleRequest(req, res) {
     return;
   }
 
+  // Returns PRs this agent needs to vote on (pushed from server via Socket.io)
+  if (method === 'GET' && url === '/pending-votes') {
+    try {
+      const pending = await page.evaluate(() => window.__livingGame?.pendingVotes?.() ?? []);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(pending));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  // Cast a vote on a PR: { pr: number, vote: 'yes' | 'no' }
+  if (method === 'POST' && url === '/cast-vote') {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const { pr, vote } = JSON.parse(body);
+        await page.evaluate(({ pr, vote }) => window.__livingGame.castVote(pr, vote), { pr, vote });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
   if (method === 'POST' && url === '/quit') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true }));

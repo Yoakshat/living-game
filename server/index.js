@@ -3,26 +3,14 @@ const http = require('http');
 const { Server } = require('socket.io');
 const crypto = require('crypto');
 
-// --- Simple UUID (Node 18+ has randomUUID built-in) -------------------------
 function generateId() {
   return crypto.randomUUID();
 }
 
 // --- Color palette -----------------------------------------------------------
-// 12 distinct bright colors that contrast with green grass.
 const COLOR_PALETTE = [
-  '#e14b4b', // red
-  '#4b8ce1', // blue
-  '#e1c14b', // yellow
-  '#4be1a0', // teal
-  '#e14bb8', // pink
-  '#b84be1', // purple
-  '#4be14b', // bright green
-  '#e17a4b', // orange
-  '#4be1e1', // cyan
-  '#e1e14b', // lime
-  '#9b4be1', // violet
-  '#4b9be1', // sky blue
+  '#e14b4b', '#4b8ce1', '#e1c14b', '#4be1a0', '#e14bb8', '#b84be1',
+  '#4be14b', '#e17a4b', '#4be1e1', '#e1e14b', '#9b4be1', '#4b9be1',
 ];
 
 // --- Name generation --------------------------------------------------------
@@ -36,7 +24,6 @@ function generateName(takenNames) {
   for (const base of ANIMAL_NAMES) {
     if (!taken.has(base)) return base;
   }
-  // All base names taken — add suffix
   for (let i = 0; i < 200; i++) {
     const suffix = Math.floor(Math.random() * 99) + 1;
     const base = ANIMAL_NAMES[Math.floor(Math.random() * ANIMAL_NAMES.length)];
@@ -49,17 +36,75 @@ function generateName(takenNames) {
 // --- Server state -----------------------------------------------------------
 // players: Map<socketId, { id, color, name, x, y }>
 const players = new Map();
-// colorIndex: tracks which colors are currently assigned (by color string)
 const usedColors = new Set();
 
 function assignColor() {
   for (const color of COLOR_PALETTE) {
     if (!usedColors.has(color)) return color;
   }
-  // More than 12 players — generate a random hue
   const h = Math.floor(Math.random() * 360);
   return `hsl(${h},80%,60%)`;
 }
+
+// --- PR governance state ----------------------------------------------------
+// prs: Map<prNumber, { number, title, url, openedAt, votes: Map<agentId, 'yes'|'no'> }>
+const prs = new Map();
+
+async function fetchOpenPRs() {
+  try {
+    const headers = { 'User-Agent': 'living-game-server' };
+    if (process.env.GITHUB_TOKEN) {
+      headers['Authorization'] = `token ${process.env.GITHUB_TOKEN}`;
+    }
+    const res = await fetch(
+      'https://api.github.com/repos/Yoakshat/living-game/pulls?state=open&per_page=20',
+      { headers }
+    );
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+async function pollGitHub() {
+  const openPRs = await fetchOpenPRs();
+  if (!openPRs) return;
+
+  const openNumbers = new Set(openPRs.map((pr) => pr.number));
+
+  // Remove PRs that closed/merged since last poll
+  for (const num of prs.keys()) {
+    if (!openNumbers.has(num)) {
+      console.log(`[PR] #${num} closed — removing from tracking`);
+      prs.delete(num);
+    }
+  }
+
+  // Detect new PRs and notify all connected agents
+  for (const pr of openPRs) {
+    if (!prs.has(pr.number)) {
+      prs.set(pr.number, {
+        number: pr.number,
+        title: pr.title,
+        url: pr.html_url,
+        openedAt: new Date(pr.created_at),
+        votes: new Map(),
+      });
+      console.log(`[PR] New #${pr.number}: ${pr.title}`);
+      // Notify every currently connected agent
+      for (const [socketId] of players) {
+        io.to(socketId).emit('pr:review_needed', [
+          { number: pr.number, title: pr.title, url: pr.html_url },
+        ]);
+      }
+    }
+  }
+}
+
+// Poll every 2 minutes (safely under unauthenticated GitHub rate limit of 60 req/hr)
+setInterval(pollGitHub, 2 * 60 * 1000);
+setTimeout(pollGitHub, 5000); // initial poll shortly after boot
 
 // --- Express + Socket.io ----------------------------------------------------
 const app = express();
@@ -68,7 +113,6 @@ const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: (origin, callback) => {
-      // Allow: no origin (same-origin requests), GitHub Pages, localhost any port
       if (
         !origin ||
         origin === 'https://yoakshat.github.io' ||
@@ -85,9 +129,30 @@ const io = new Server(server, {
   },
 });
 
-// Health endpoints — Railway uses these to detect the service is up.
 app.get('/', (_req, res) => res.json({ status: 'ok' }));
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
+
+// Governance workflow reads this to decide merge/close
+app.get('/vote-tally', (_req, res) => {
+  const activeAgents = players.size;
+  const tally = [...prs.values()].map((pr) => {
+    let yes = 0, no = 0;
+    for (const vote of pr.votes.values()) {
+      if (vote === 'yes') yes++;
+      else no++;
+    }
+    return {
+      number: pr.number,
+      title: pr.title,
+      url: pr.url,
+      openedAt: pr.openedAt,
+      yesVotes: yes,
+      noVotes: no,
+      totalVotes: yes + no,
+    };
+  });
+  res.json({ activeAgents, prs: tally });
+});
 
 // --- Socket.io events -------------------------------------------------------
 io.on('connection', (socket) => {
@@ -96,51 +161,47 @@ io.on('connection', (socket) => {
   usedColors.add(color);
   const name = generateName([...players.values()].map((p) => p.name));
 
-  // Default spawn near world center (32×48 = 1536 wide, 24×48 = 1152 tall)
   const spawnX = 768;
   const spawnY = 576;
-
   const player = { id, color, name, x: spawnX, y: spawnY };
   players.set(socket.id, player);
 
   console.log(`[+] ${name} (${id.slice(0, 6)}) connected — total: ${players.size}`);
 
-  // 1. Send new client their identity + current list of all other players.
+  // Send identity + existing players
   socket.emit('self:init', {
     id,
     color,
     name,
     others: [...players.values()]
       .filter((p) => p.id !== id)
-      .map(({ id: pid, color: pc, name: pn, x, y }) => ({
-        id: pid,
-        color: pc,
-        name: pn,
-        x,
-        y,
-      })),
+      .map(({ id: pid, color: pc, name: pn, x, y }) => ({ id: pid, color: pc, name: pn, x, y })),
   });
 
-  // 2. Announce newcomer to everyone already connected.
+  // Announce newcomer to others
   socket.broadcast.emit('player:join', { id, color, name, x: spawnX, y: spawnY });
 
-  // 3a. Identity: client may send a preferred name shortly after connecting.
+  // Send any open PRs this agent hasn't voted on yet
+  const unvoted = [...prs.values()]
+    .filter((pr) => !pr.votes.has(id))
+    .map((pr) => ({ number: pr.number, title: pr.title, url: pr.url }));
+  if (unvoted.length > 0) {
+    socket.emit('pr:review_needed', unvoted);
+  }
+
   socket.on('player:identify', (data) => {
     const p = players.get(socket.id);
     if (!p) return;
     const requestedName = typeof data.name === 'string' ? data.name.trim() : '';
     if (!requestedName) return;
-    // Only adopt the name if it's not already taken by another player.
     const takenByOther = [...players.values()].some((q) => q !== p && q.name === requestedName);
     if (!takenByOther) {
       console.log(`[~] ${p.name} → ${requestedName}`);
       p.name = requestedName;
-      // Re-broadcast updated identity to all clients (including sender).
       io.emit('player:renamed', { id: p.id, name: p.name });
     }
   });
 
-  // 3b. Movement: client emits player:move, we broadcast player:moved to others.
   socket.on('player:move', (data) => {
     const p = players.get(socket.id);
     if (!p) return;
@@ -151,7 +212,20 @@ io.on('connection', (socket) => {
     socket.broadcast.emit('player:moved', { id: p.id, x, y });
   });
 
-  // 4. Disconnect: clean up and notify others.
+  // PR vote: { prNumber: number, vote: 'yes' | 'no' }
+  socket.on('pr:vote', (data) => {
+    const p = players.get(socket.id);
+    if (!p) return;
+    const { prNumber, vote } = data;
+    if (typeof prNumber !== 'number' || (vote !== 'yes' && vote !== 'no')) return;
+    const pr = prs.get(prNumber);
+    if (!pr) return;
+    pr.votes.set(p.id, vote);
+    const yes = [...pr.votes.values()].filter((v) => v === 'yes').length;
+    const no = [...pr.votes.values()].filter((v) => v === 'no').length;
+    console.log(`[vote] ${p.name} voted ${vote} on PR #${prNumber} — ${yes}y/${no}n`);
+  });
+
   socket.on('disconnect', () => {
     const p = players.get(socket.id);
     if (!p) return;
