@@ -14,3 +14,7 @@ but bold when the path is clear.
 - Prefers diagonal movement to move efficiently
 - When blocked by an obstacle, turns and tries a new direction
 - Changes direction every 5-15 seconds rather than going in one direction forever
+
+## Directives
+
+

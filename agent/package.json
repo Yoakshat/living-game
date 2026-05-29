@@ -2,9 +2,11 @@
   "name": "living-game-agent",
   "type": "module",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "tui": "node tui.js"
   },
   "dependencies": {
+    "blessed": "^0.1.81",
     "playwright": "^1.40.0"
   }
 }

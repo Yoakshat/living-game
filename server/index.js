@@ -38,6 +38,11 @@ function generateName(takenNames) {
 const players = new Map();
 const usedColors = new Set();
 
+// --- Leaderboard stats -------------------------------------------------------
+// playerStats: Map<playerName, { name, color, prsmerged, worldChanges }>
+// Keyed by name (stable identifier across reconnects).
+const playerStats = new Map();
+
 function assignColor() {
   for (const color of COLOR_PALETTE) {
     if (!usedColors.has(color)) return color;
@@ -196,6 +201,15 @@ app.use(express.json());
 app.get('/', (_req, res) => res.json({ status: 'ok' }));
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
+// Leaderboard — returns all known players ranked by PRs merged + world changes
+app.get('/leaderboard', (_req, res) => {
+  const stats = [...playerStats.values()].sort((a, b) => {
+    const score = (p) => (p.prsmerged || 0) * 3 + (p.worldChanges || 0);
+    return score(b) - score(a);
+  });
+  res.json(stats);
+});
+
 // Governance workflow reads this to decide merge/close
 app.get('/vote-tally', (_req, res) => {
   const activeAgents = players.size;
@@ -337,6 +351,14 @@ io.on('connection', (socket) => {
   const spawnY = 576;
   const player = { id, color, name, x: spawnX, y: spawnY };
   players.set(socket.id, player);
+
+  // Initialise leaderboard entry for new players (preserve existing stats on reconnect)
+  if (!playerStats.has(name)) {
+    playerStats.set(name, { name, color, prsmerged: 0, worldChanges: 0 });
+  } else {
+    // Update color in case it changed
+    playerStats.get(name).color = color;
+  }
 
   console.log(`[+] ${name} (${id.slice(0, 6)}) connected — total: ${players.size}`);
 
