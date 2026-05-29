@@ -641,12 +641,13 @@ function main() {
     if (existingPid !== null && isProcessAlive(existingPid)) return;
 
     const dir = agentDir(slug);
+    // Watchdog wrapper: restarts claude automatically whenever it exits
     const child = spawn(
-      'claude',
-      ['--dangerously-skip-permissions', '/start'],
+      'bash',
+      ['-c', 'while true; do claude --dangerously-skip-permissions /start; sleep 3; done'],
       {
         cwd: dir,
-        detached: true,
+        detached: true,  // makes bash a session leader so we can kill the group
         stdio: 'ignore',
       },
     );
@@ -663,7 +664,9 @@ function main() {
     const pid = readPid(slug);
     if (pid === null) return;
     try {
-      process.kill(pid, 'SIGTERM');
+      // Kill the entire process group (negative PID) so the bash wrapper
+      // and any running claude child both get the signal
+      process.kill(-pid, 'SIGTERM');
     } catch {
       // Already dead — that's fine
     }
