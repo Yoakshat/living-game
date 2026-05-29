@@ -1,43 +1,68 @@
-# Acceptance: controls-split
+# Acceptance: personality-tui
 
-## What this task achieves
+## What This Is
 
-Agents proposing PRs that add new game mechanics (e.g. new movement modes, new actions) need to update
-the controls documentation alongside `src/` code. Today `controls.md` lives at the repo root, so CI
-blocks any PR that touches it. This task moves the controls doc inside `src/` so agents can update it
-in the same PR as their code change.
+A terminal UI players launch alongside their agent to configure personality and directives, and view the leaderboard. Players already run the agent in a terminal (Claude Code), so a TUI is the most natural companion interface.
 
-## Definition of done (from the perspective of an agent or repo owner)
+---
 
-### File layout
-1. `src/controls.md` exists and contains the full game-inputs reference:
-   - `## Agent Actions` section (the /press, /tap, /click, /drag, /screenshot, /health, /quit API)
-   - `## Current Controls` section (WASD table + duration guide)
-   - `## Tips for agents` section
-2. `agent/governance.md` exists and contains only the PR governance section:
-   - `## PR Governance` (how to propose, review, and auto-merge)
-   - The "What counts as a good PR" checklist, updated to reference `src/controls.md`
-3. Root-level `controls.md` is **gone** — no file at that path.
+## User Flows
 
-### start.md (global Claude Code command)
-4. `~/.claude/commands/start.md` references `src/controls.md` for game inputs — not `controls.md`.
-5. `~/.claude/commands/start.md` references `agent/governance.md` for meta-operations (propose/review).
-6. The "Hard limits" section in `start.md` explicitly lists `src/controls.md` as the one controls file
-   agents may edit, alongside other `src/` files.
-7. The in-loop reminder to "use only what controls.md describes" now points to `src/controls.md`.
+### Launch
+1. Player runs `npm run tui` from the `agent/` directory.
+2. TUI opens showing three panels simultaneously.
+3. Header displays the character name from `character.md`.
+4. No crash on launch, even if server is offline or `## Directives` section is missing.
 
-### CI behaviour
-8. A PR that changes only `src/controls.md` (and other `src/` files) passes the scope-check step.
-9. A PR that changes `agent/governance.md` fails the scope-check step with an appropriate error message.
-10. The CI `ci.yml` logic is verified correct — the `grep -v '^src/'` pattern correctly allows
-    `src/controls.md` and blocks `agent/governance.md`.
+### Personality Panel (top-left)
+1. Shows current personality text from the `## Personality` section of `character.md`.
+2. User presses `Tab` or arrow keys to cycle through presets: Diplomat, Explorer, Builder, Schemer.
+3. Currently selected/highlighted preset is visually distinct.
+4. User presses `e` to enter custom personality edit mode.
+5. On selecting a preset or saving custom text, `## Personality` section of `character.md` is updated immediately.
 
-### Build
-11. `npm run build` still passes after all changes — no import references `controls.md` in JS source.
+### Directives Panel (bottom-left)
+1. Shows current directives from the `## Directives` section of `character.md` as a numbered list.
+2. Arrow keys move highlight through directives.
+3. Press `a` to add a new directive (prompts for text; capped at 3).
+4. Press `d` to delete the highlighted directive.
+5. Press `e` to edit the highlighted directive (pre-fills current text).
+6. Changes saved immediately to `character.md`.
+7. If `## Directives` section does not exist, TUI creates it.
 
-## Edge cases
-- `src/controls.md` is a markdown file, not a JS import — the Vite build must not break.
-- The "What counts as a good PR" checklist currently says "`controls.md` updated if any mechanic changed"
-  — this must be updated to `src/controls.md`.
-- `start.md` has two references to controls: one in the setup instructions and one in-loop. Both must
-  be updated.
+### Leaderboard Panel (right)
+1. On open, fetches from game server `/leaderboard` endpoint.
+2. Shows players ranked by PRs merged and world changes.
+3. Shows name, PRs merged, world changes columns with color indicator.
+4. Refreshes every 30 seconds automatically.
+5. Shows "No data yet" if response is empty.
+6. Shows "Server offline" gracefully if server unreachable — does not crash.
+
+### Exit
+- Press `q` or `Ctrl+C` to exit cleanly.
+
+---
+
+## Definition of Done
+
+1. `npm run tui` from `agent/` launches the TUI without errors.
+2. All three panels are visible with box borders and labels.
+3. Editing personality (preset or custom) persists to `character.md` when re-read.
+4. Adding, editing, and deleting a directive persists to `character.md`.
+5. Leaderboard panel shows data from `/leaderboard` (even zeroed stats are valid).
+6. Server offline shows graceful message, not a crash.
+7. `q` or `Ctrl+C` exits cleanly.
+8. `npm run build` still passes from the repo root.
+9. `agent/README.md` documents how to launch the TUI.
+10. `agent/character.md` has a `## Directives` section.
+11. `GET /leaderboard` endpoint exists on the server and returns `[{ name, color, prsmerged, worldChanges }]`.
+
+---
+
+## Edge Cases
+- Missing `## Directives` in `character.md` → TUI creates the section automatically.
+- Server unreachable → leaderboard shows "Server offline", TUI continues running.
+- Missing `character.md` → TUI shows error and exits cleanly (no stack trace).
+- Directives at cap (3) and `a` pressed → shows "Max 3 directives" notice.
+- Custom personality empty string → discard, keep previous value.
+- Terminal smaller than 80x24 → panels may truncate but TUI does not crash.
