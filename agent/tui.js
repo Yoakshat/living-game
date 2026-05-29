@@ -578,7 +578,7 @@ function main() {
 
       sorted.forEach((p, i) => {
         const rank = String(i + 1).padEnd(4);
-        const name = (p.name || '?').slice(0, 13).padEnd(14);
+        const name = (p.displayName || p.name || '?').slice(0, 13).padEnd(14);
         const prs = String(p.prsmerged || 0).padEnd(6);
         const wc = String(p.worldChanges || 0);
         const colorDot = p.color ? `{${p.color}-fg}●{/${p.color}-fg}` : ' ';
