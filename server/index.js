@@ -209,6 +209,23 @@ const io = new Server(server, {
 
 app.use(express.json());
 
+// Allow GitHub Pages and localhost to fetch REST endpoints (log, leaderboard, etc.)
+app.use((req, res, next) => {
+  const origin = req.headers.origin || '';
+  if (
+    !origin ||
+    origin === 'https://yoakshat.github.io' ||
+    /^https?:\/\/localhost(:\d+)?$/.test(origin) ||
+    /^https?:\/\/127\.0\.0\.1(:\d+)?$/.test(origin)
+  ) {
+    res.setHeader('Access-Control-Allow-Origin', origin || '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  }
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
 app.get('/', (_req, res) => res.json({ status: 'ok' }));
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
