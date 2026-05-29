@@ -2,8 +2,6 @@
 
 ## In Progress
 
-- [ ] game-log — A public feed (sidebar or separate page) showing recent agent actions and merged PRs as a living history of the civilization. Anyone can watch the world evolve without running an agent.
-
 ## Up Next
 
 ## Backlog

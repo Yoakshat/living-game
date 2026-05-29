@@ -33,8 +33,19 @@ function generateName(takenNames) {
   return `Player_${generateId().slice(0, 4)}`;
 }
 
+// --- Game log (circular buffer, max 100 entries) ----------------------------
+const LOG_MAX = 100;
+const gameLog = [];
+
+function addLogEntry(type, player, message) {
+  const entry = { type, player: player || null, message, timestamp: new Date().toISOString() };
+  gameLog.push(entry);
+  if (gameLog.length > LOG_MAX) gameLog.shift();
+  return entry;
+}
+
 // --- Server state -----------------------------------------------------------
-// players: Map<socketId, { id, color, name, x, y }>
+// players: Map<socketId, { id, color, name, x, y, moveCount }>
 const players = new Map();
 const usedColors = new Set();
 
@@ -210,6 +221,22 @@ app.get('/leaderboard', (_req, res) => {
   res.json(stats);
 });
 
+// Public live feed: last 50 log entries
+app.get('/log', (_req, res) => {
+  const last50 = gameLog.slice(-50);
+  res.json(last50);
+});
+
+// External event push (e.g. governance workflow posts PR merges here)
+app.post('/log-event', (req, res) => {
+  const { type, player, message } = req.body || {};
+  if (typeof type !== 'string' || typeof message !== 'string') {
+    return res.status(400).json({ error: 'type (string) and message (string) required' });
+  }
+  addLogEntry(type, player || null, message);
+  res.json({ ok: true });
+});
+
 // Governance workflow reads this to decide merge/close
 app.get('/vote-tally', (_req, res) => {
   const activeAgents = players.size;
@@ -349,7 +376,7 @@ io.on('connection', (socket) => {
 
   const spawnX = 768;
   const spawnY = 576;
-  const player = { id, color, name, x: spawnX, y: spawnY };
+  const player = { id, color, name, x: spawnX, y: spawnY, moveCount: 0 };
   players.set(socket.id, player);
 
   // Initialise leaderboard entry for new players (preserve existing stats on reconnect)
@@ -361,6 +388,7 @@ io.on('connection', (socket) => {
   }
 
   console.log(`[+] ${name} (${id.slice(0, 6)}) connected — total: ${players.size}`);
+  addLogEntry('action', name, `${name} joined the world`);
 
   // Send identity + existing players
   socket.emit('self:init', {
@@ -404,6 +432,11 @@ io.on('connection', (socket) => {
     p.x = x;
     p.y = y;
     socket.broadcast.emit('player:moved', { id: p.id, x, y });
+    // Sample ~every 10 moves to log activity without flooding
+    p.moveCount = (p.moveCount || 0) + 1;
+    if (p.moveCount % 10 === 0) {
+      addLogEntry('action', p.name, `${p.name} is exploring`);
+    }
   });
 
   // PR vote: { prNumber: number, vote: 'yes' | 'no' }
@@ -432,6 +465,7 @@ io.on('connection', (socket) => {
     const p = players.get(socket.id);
     if (!p) return;
     console.log(`[-] ${p.name} (${p.id.slice(0, 6)}) disconnected — total: ${players.size - 1}`);
+    addLogEntry('action', p.name, `${p.name} left the world`);
     usedColors.delete(p.color);
     players.delete(socket.id);
     io.emit('player:left', { id: p.id });
