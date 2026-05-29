@@ -1,5 +1,6 @@
 import { generateTextures } from '../textures.js';
 import { io } from 'socket.io-client';
+import { GameLog } from '../ui/GameLog.js';
 
 // World is measured in tiles; pixel size derives from the tile size.
 const WORLD_TILES_X = 32;
@@ -27,6 +28,8 @@ export default class WorldScene extends Phaser.Scene {
     this._eventQueue = [];
     this._ready = false;
     this._lastEmitTime = 0;
+    // Game log panel
+    this._gameLog = null;
   }
 
   create() {
@@ -131,6 +134,13 @@ export default class WorldScene extends Phaser.Scene {
 
     // --- Connect to multiplayer server --------------------------------------
     this._connectMultiplayer(spawn);
+
+    // --- Game log panel -----------------------------------------------------
+    const logServerUrl =
+      (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_SERVER_URL)
+        ? import.meta.env.VITE_SERVER_URL
+        : 'http://localhost:3001';
+    this._gameLog = new GameLog(logServerUrl);
 
     // Mark scene ready — flush any queued events.
     this._ready = true;
@@ -247,6 +257,9 @@ export default class WorldScene extends Phaser.Scene {
     // Local player name tag.
     this._selfNameTag = this._makeNameTag(name);
 
+    // Register color for log panel
+    if (this._gameLog) this._gameLog.setPlayerColor(name, color);
+
     // Render all players already in the world.
     for (const other of others) {
       this._spawnRemotePlayer(other);
@@ -282,12 +295,20 @@ export default class WorldScene extends Phaser.Scene {
       if (this._selfNameTag) {
         this._selfNameTag.setText(name);
       }
+      // Re-register color under new name for log panel
+      if (this._selfColor && this._gameLog) {
+        this._gameLog.setPlayerColor(name, this._selfColor);
+      }
       return;
     }
     // Update remote player name tag.
     const rp = this.remotePlayers.get(id);
     if (!rp) return;
     rp.nameTag.setText(name);
+    // Re-register color under new name for log panel
+    if (rp.color && this._gameLog) {
+      this._gameLog.setPlayerColor(name, rp.color);
+    }
   }
 
   // Create a remote player sprite + name tag and add to the map.
@@ -310,7 +331,11 @@ export default class WorldScene extends Phaser.Scene {
       nameTag,
       targetX: x,
       targetY: y,
+      color,
     });
+
+    // Register color for log panel
+    if (this._gameLog) this._gameLog.setPlayerColor(name, color);
 
     console.log('[multiplayer] player joined:', id, name, color);
   }
