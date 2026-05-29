@@ -5,7 +5,7 @@
  *  1. Polls GET /vote-tally every 60 seconds
  *  2. For each PR with enforcerState = 'needs-enforcer-review':
  *     a. Fetches the diff between approvedSha and newSha from GitHub
- *     b. Sends the diff to Claude to judge if it's purely mechanical conflict resolution
+ *     b. Sends the diff to DeepSeek to judge if it's purely mechanical conflict resolution
  *     c. Posts the verdict to POST /enforcer-verdict on the game server
  *     d. Posts a GitHub comment on the PR explaining the decision
  *
@@ -71,24 +71,6 @@ async function serverFetch(path, options = {}) {
   }
 }
 
-async function githubFetch(path, options = {}) {
-  const url = `https://api.github.com${path}`;
-  const res = await fetch(url, {
-    ...options,
-    headers: {
-      Authorization: `token ${GITHUB_TOKEN}`,
-      'User-Agent': 'living-game-enforcer',
-      Accept: 'application/vnd.github+json',
-      ...(options.headers || {}),
-    },
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`GitHub API HTTP ${res.status} for ${path}: ${text}`);
-  }
-  return await res.json();
-}
-
 // --- GitHub helpers ---------------------------------------------------------
 
 async function fetchDiffText(approvedSha, newSha) {
@@ -108,15 +90,26 @@ async function fetchDiffText(approvedSha, newSha) {
 }
 
 async function postGitHubComment(prNumber, body) {
-  await githubFetch(`/repos/${GITHUB_REPO}/issues/${prNumber}/comments`, {
+  const url = `https://api.github.com/repos/${GITHUB_REPO}/issues/${prNumber}/comments`;
+  const res = await fetch(url, {
     method: 'POST',
+    headers: {
+      Authorization: `token ${GITHUB_TOKEN}`,
+      'User-Agent': 'living-game-enforcer',
+      Accept: 'application/vnd.github+json',
+      'Content-Type': 'application/json',
+    },
     body: JSON.stringify({ body }),
   });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`GitHub API HTTP ${res.status}: ${text}`);
+  }
 }
 
-// --- Claude helpers ---------------------------------------------------------
+// --- Model helpers ----------------------------------------------------------
 
-const CLAUDE_SYSTEM_PROMPT = `You are a strict code reviewer for a multiplayer game project. Your sole job is to determine whether a git diff represents PURELY mechanical conflict resolution — nothing more.
+const SYSTEM_PROMPT = `You are a strict code reviewer for a multiplayer game project. Your sole job is to determine whether a git diff represents PURELY mechanical conflict resolution — nothing more.
 
 ALLOWED changes (approve these):
 - Removing conflict markers (<<<<<<<, =======, >>>>>>>) and choosing one side
@@ -168,7 +161,7 @@ async function callModelWithTimeout(prompt) {
         model: 'deepseek-chat',
         max_tokens: 256,
         messages: [
-          { role: 'system', content: CLAUDE_SYSTEM_PROMPT },
+          { role: 'system', content: SYSTEM_PROMPT },
           { role: 'user', content: prompt },
         ],
       },
@@ -194,8 +187,8 @@ async function callModel(prompt) {
   throw lastError;
 }
 
-function parseVerdict(claudeText) {
-  const lines = claudeText.split('\n').map((l) => l.trim());
+function parseVerdict(modelText) {
+  const lines = modelText.split('\n').map((l) => l.trim());
   let verdict = null;
   let reason = null;
 
@@ -210,15 +203,15 @@ function parseVerdict(claudeText) {
     }
   }
 
-  // Default to block if Claude's response was unclear
+  // Default to block if the response was unclear
   if (!verdict) {
     verdict = 'block';
-    reason = reason || 'Claude response was ambiguous — blocking for safety.';
+    reason = reason || 'Model response was ambiguous — blocking for safety.';
   }
   if (!reason) {
     reason = verdict === 'approve'
       ? 'Delta is purely mechanical conflict resolution.'
-      : 'Claude determined the changes were not purely mechanical.';
+      : 'Model determined the changes were not purely mechanical.';
   }
 
   return { verdict, reason };
@@ -245,7 +238,7 @@ async function analyzePR(pr) {
     const diff = await fetchDiffText(pr.approvedSha, pr.newSha);
     console.log(`[enforcer] PR #${pr.number} diff fetched (${diff.length} chars)`);
 
-    // 2. Build prompt and call Claude
+    // 2. Build prompt and call DeepSeek
     const prompt = buildPrompt(pr, diff);
     console.log(`[enforcer] PR #${pr.number} calling DeepSeek`);
 

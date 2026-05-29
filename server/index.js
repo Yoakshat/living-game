@@ -393,7 +393,7 @@ io.on('connection', (socket) => {
     const pr = prs.get(prNumber);
     if (!pr) return;
     // Don't allow voting on PRs in enforcer review or already decided
-    if (pr.enforcerState && pr.enforcerState !== null) return;
+    if (pr.enforcerState) return;
     pr.votes.set(p.id, vote);
     let yes = 0, no = 0;
     for (const v of pr.votes.values()) { if (v === 'yes') yes++; else no++; }
