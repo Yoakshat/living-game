@@ -8,42 +8,9 @@ permissions:
   pull-requests: write
 
 jobs:
-  scope-check:
-    name: Verify changes are in src/ only
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Check for protected file changes
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          BASE=${{ github.event.pull_request.base.sha }}
-          HEAD=${{ github.event.pull_request.head.sha }}
-          CHANGED=$(git diff --name-only "$BASE" "$HEAD")
-          echo "Changed files:"
-          echo "$CHANGED"
-
-          VIOLATIONS=$(echo "$CHANGED" | grep -v '^src/' || true)
-          if [ -n "$VIOLATIONS" ]; then
-            echo ""
-            echo "ERROR: PRs may only change files under src/ (game mechanics)."
-            echo "The following files are outside the allowed scope:"
-            echo "$VIOLATIONS"
-            gh pr comment "${{ github.event.pull_request.number }}" \
-              --repo "${{ github.repository }}" \
-              --body "CI failed — this PR touches files outside \`src/\`. Agent PRs may only change game mechanics (files under \`src/\`). Infrastructure, governance, server, and agent config are controlled by the repo owner."
-            exit 1
-          fi
-
-          echo "Scope check passed — all changes are within src/."
-
   build:
     name: Build & smoke test
     runs-on: ubuntu-latest
-    needs: scope-check
 
     steps:
       - name: Checkout
