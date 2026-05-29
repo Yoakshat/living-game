@@ -94,6 +94,14 @@ export default class WorldScene extends Phaser.Scene {
       .image(caveX, caveY, 'cave')
       .setOrigin(0.5, 0.5)
       .setDepth(caveY + meta.cave.h / 2);
+    this._caveX = caveX;
+    this._caveY = caveY;
+
+    // Darkness overlay — fades in as the player approaches the cave.
+    // Camera-fixed so it covers the whole viewport regardless of scroll.
+    this._caveVignette = this.add.graphics();
+    this._caveVignette.setScrollFactor(0);
+    this._caveVignette.setDepth(10000);
 
     // --- Well (south-west quadrant, central-ish) ----------------------------
     // Purely visual landmark — no collision.
@@ -573,6 +581,23 @@ export default class WorldScene extends Phaser.Scene {
       rp.nameTag.setPosition(
         rp.sprite.x,
         rp.sprite.y - this.meta.player.size / 2 - 4
+      );
+    }
+
+    // Cave darkness: dim the screen as the player enters the cave.
+    // Radius at which darkness starts (world pixels). At center: max darkness.
+    const CAVE_DARK_RADIUS = 140;
+    const dist = Phaser.Math.Distance.Between(
+      this.player.x, this.player.y, this._caveX, this._caveY
+    );
+    const alpha = Phaser.Math.Clamp(1 - dist / CAVE_DARK_RADIUS, 0, 1) * 0.7;
+    this._caveVignette.clear();
+    if (alpha > 0.01) {
+      this._caveVignette.fillStyle(0x000000, alpha);
+      this._caveVignette.fillRect(
+        0, 0,
+        this.cameras.main.width,
+        this.cameras.main.height
       );
     }
   }
