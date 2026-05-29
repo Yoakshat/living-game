@@ -15,7 +15,7 @@
  *   GITHUB_TOKEN       — GitHub token for reading diffs and posting comments
  */
 
-import OpenAI from 'openai';
+const OpenAI = require('openai').default;
 
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 const SERVER_URL = (process.env.SERVER_URL || '').replace(/\/$/, '');

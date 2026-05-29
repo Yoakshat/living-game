@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "description": "Enforcer agent: reviews post-threshold SHA changes and posts verdicts",
   "main": "index.js",
-  "type": "module",
   "scripts": {
     "start": "node index.js"
   },
