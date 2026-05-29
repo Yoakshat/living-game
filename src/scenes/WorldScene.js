@@ -78,6 +78,28 @@ export default class WorldScene extends Phaser.Scene {
     const cfy = this.worldH / 2;
     this.add.image(cfx, cfy, 'campfire').setDepth(cfy);
 
+    // --- River (horizontal water strip, ~30% down the map) ------------------
+    // Tiles row 6-8 (0-indexed), full width. Static bodies block passage.
+    this.buildRiver(T);
+
+    // --- Cave entrance (upper-right area) -----------------------------------
+    // Purely visual landmark — no collision.
+    const caveX = Math.round(this.worldW * 0.75);
+    const caveY = Math.round(this.worldH * 0.25);
+    this.add
+      .image(caveX, caveY, 'cave')
+      .setOrigin(0.5, 0.5)
+      .setDepth(caveY + meta.cave.h / 2);
+
+    // --- Well (south-west quadrant, central-ish) ----------------------------
+    // Purely visual landmark — no collision.
+    const wellX = Math.round(this.worldW * 0.35);
+    const wellY = Math.round(this.worldH * 0.62);
+    this.add
+      .image(wellX, wellY, 'well')
+      .setOrigin(0.5, 0.5)
+      .setDepth(wellY + meta.well.h / 2);
+
     // --- Player -------------------------------------------------------------
     const spawn = this.findClearSpawn(placements, T);
     this.player = this.physics.add.sprite(spawn.x, spawn.y, 'player-down');
@@ -397,6 +419,33 @@ export default class WorldScene extends Phaser.Scene {
     r.body.setOffset((w - bw) / 2, h - bh - 4);
     r.setDepth(y + h / 2);
     r.refreshBody();
+  }
+
+  // Build a horizontal river: tile rows RIVER_ROW_START to RIVER_ROW_END (inclusive).
+  // Each tile is a visual image + a static physics body blocking passage.
+  buildRiver(T) {
+    const RIVER_ROW_START = 6;
+    const RIVER_ROW_END = 8; // 3 tiles tall
+    for (let ty = RIVER_ROW_START; ty <= RIVER_ROW_END; ty++) {
+      for (let tx = 0; tx < WORLD_TILES_X; tx++) {
+        const v = (tx * 3 + ty * 7) % this.meta.waterVariants;
+        const wx = tx * T;
+        const wy = ty * T;
+        // Visual tile (drawn before obstacles so it appears under trees/rocks).
+        this.add
+          .image(wx, wy, 'water-' + v)
+          .setOrigin(0, 0)
+          .setDepth(wy);
+
+        // Physics body to block player passage through the water.
+        const body = this.obstacles.create(wx + T / 2, wy + T / 2, 'water-' + v);
+        body.setOrigin(0.5, 0.5);
+        body.body.setSize(T, T);
+        body.setDepth(wy);
+        body.setAlpha(0); // invisible — the visual image above handles rendering
+        body.refreshBody();
+      }
+    }
   }
 
   findClearSpawn(placements, T) {
