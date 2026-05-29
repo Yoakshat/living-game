@@ -1,93 +1,50 @@
-# Acceptance: game-log
+# Acceptance: enforcer-conflict-resolution
 
-## What This Is
+## Feature
+The enforcer automatically detects and resolves merge conflicts on open PRs, removing the need for agents to handle git mechanics.
 
-A living public feed showing recent activity in the game world. Anyone can load the game and see what agents have been doing and what PRs have been merged — no agent required.
+## User Flows
 
----
+### Happy path — resolvable conflict
+1. A PR has accumulated votes and, during governance polling, `prData.mergeable === false`
+2. The enforcer detects this (replaces the existing "post a comment and skip" path)
+3. The enforcer clones the repo to `/tmp/living-game-resolve-<prNumber>` (or re-uses if dir already exists from a prior partial run)
+4. Checks out the PR branch, runs `git merge origin/main`
+5. Collects files with `<<<<<<<` conflict markers
+6. For each conflicted file, sends the raw conflict text to DeepSeek with context that it's a game world file and both contributions should be preserved where possible
+7. Writes resolved content back, runs `git add`, `git commit -m "Auto-resolve merge conflict with main"`
+8. Pushes to the PR branch via `git push origin HEAD:<branchName>`
+9. Posts a GitHub comment listing the resolved files and a brief summary of what changed
+10. Cleans up the temp directory
+11. The enforcer does NOT merge or approve the PR — governance picks it up on the next poll cycle as normal
 
-## Log Entry Format
+### Semantic conflict — DeepSeek says incompatible
+1. Enforcer runs conflict resolution but DeepSeek signals the two changes are fundamentally incompatible
+2. Enforcer closes the PR via GitHub API
+3. Posts a comment explaining the incompatibility (surfaces DeepSeek's reasoning)
+4. Cleans up temp dir
 
-Each entry is a JSON object:
-```json
-{
-  "type": "action" | "pr_merged",
-  "player": "Wolf",
-  "message": "Wolf joined the world",
-  "timestamp": "2026-05-28T12:34:56.789Z"
-}
-```
+### CI failure after auto-resolution
+1. On a subsequent poll cycle, enforcer checks the CI status of the PR's current SHA
+2. If CI failed on a SHA that the enforcer previously auto-resolved, the enforcer closes the PR with a note that auto-resolution produced broken code
 
----
-
-## What Triggers Log Entries
-
-### Player events (type: "action")
-- **Connect**: `"<Name> joined the world"` — when a player connects
-- **Disconnect**: `"<Name> left the world"` — when a player disconnects
-- **Movement samples**: `"<Name> is exploring"` — logged every ~10 move events per player to capture activity without flooding
-
-### PR events (type: "pr_merged")
-- Posted externally via `POST /log-event`
-- The governance workflow calls this when a PR is merged
-- Message e.g. `"PR #42: Add river was merged"`
-
----
-
-## Server Endpoints
-
-### GET /log
-Returns the last 50 entries as a JSON array, newest last.
-- No auth required
-- Response: `[{ type, player, message, timestamp }]`
-- Empty array `[]` if no entries yet
-
-### POST /log-event
-Accepts externally-posted log entries (e.g., governance workflow on PR merge).
-- Body: `{ type: "pr_merged", player: string|null, message: string }`
-- Appends to buffer with server-assigned timestamp
-- Returns `{ ok: true }`
-- Returns 400 if type or message is missing
-
-## In-Memory Buffer
-- Max 100 entries (oldest dropped when full)
-- Not persisted across restarts
-
----
-
-## Frontend Log Panel
-
-### Position & Size
-- Fixed to bottom-right corner of the game canvas (screen-space, not world-space)
-- Width ~300px, height ~180px
-- Does NOT scroll with camera — stays fixed on screen
-
-### Visual Style
-- Semi-transparent dark background (~70% opacity black)
-- Subtle rounded corners, small padding (8px)
-- Does not block game interaction (pointer-events: none)
-
-### Content
-- Shows last 8–10 entries, newest at the bottom
-- Each entry: short timestamp (`HH:MM:SS`), player name in their assigned color, message in light gray
-- If no entries: faint placeholder "No activity yet"
-
-### Data Loading
-- On scene load: fetch GET /log from the server URL
-- Poll every 5 seconds for updates
-- If server is unreachable: panel stays visible but empty (fail silently)
-
-### Implementation
-- Panel is a fixed HTML div appended to the game container — does NOT use world-space Phaser objects
-
----
+### Already-resolved guard
+1. In-memory map `resolvedConflicts: Map<prNumber, resolvedSha>` tracks what was already resolved
+2. If the PR's HEAD SHA matches the stored `resolvedSha`, skip re-resolution
+3. If the PR's HEAD SHA changes (new push), remove it from the map so a fresh resolution can run if needed
 
 ## Definition of Done
+- `enforcer/index.js` handles `mergeable === false` by auto-resolving rather than only posting a "has conflicts" comment
+- Git operations use `/tmp/living-game-resolve-<pr>` and clean up after
+- No additional npm dependencies — uses Node.js `child_process` for git commands
+- DeepSeek receives a well-formed prompt that: (a) provides conflict-marked file content, (b) asks for a clean resolved version, (c) explains the game world context and asks to preserve both contributions where possible
+- Semantic incompatibility closes the PR with an explanation comment
+- CI-failure-after-resolution closes the PR with a note
+- In-memory dedup map prevents re-resolving same SHA on every poll cycle
+- Enforcer does NOT approve or merge — just pushes the resolved commit
+- Logs progress clearly at each step (clone, merge, files resolved, push, etc.)
 
-1. Log panel appears in game at bottom-right, even when offline
-2. Player connect/disconnect entries appear in the feed within 5 seconds
-3. Movement entries appear periodically (~1 per 10 move emits per player)
-4. `GET /log` returns valid JSON array with correct schema
-5. `POST /log-event` with a PR merge body causes that entry to appear within 5 seconds
-6. Panel doesn't block game view — game input still works
-7. `npm run build` passes with no errors
+## Out of Scope
+- Persisting resolved state across restarts (in-memory only)
+- Recovering a partially failed push by retrying (fail gracefully, log, leave PR open)
+- Handling binary file conflicts
