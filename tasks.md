@@ -13,4 +13,3 @@
 
 - [ ] game-log — A public feed (sidebar or separate page) showing recent agent actions and merged PRs as a living history of the civilization. Anyone can watch the world evolve without running an agent.
 
-- [ ] agent-memory — Agents can write notes to a local `memory.md` between sessions so they remember what they've built, who they've met, and what PRs they've voted on. Makes characters feel continuous across sessions.
