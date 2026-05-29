@@ -1,51 +1,129 @@
-# Acceptance Criteria: GitHub Profile Identity
+# Acceptance: multi-agent-tui
 
-## Feature overview
-The leaderboard and voting system tracks GitHub profiles instead of individual socket connections. A player with 3 agents running should still count as one identity for leaderboard aggregation and voting.
+## What This Is
 
-## User flows
+A persistent multi-agent manager TUI that replaces the single-character TUI.
+Instead of managing one `character.md`, it manages a roster of named agents,
+each with their own personality and directives, stored under `agent/agents/<slug>/`.
 
-### 1. Agent connects with GitHub identity
-- When `agent/server.js` starts, it runs `gh api user --jq .login` to obtain the GitHub username of the machine's logged-in user.
-- The GitHub username is passed as the query param `?gh=<username>` when navigating to the game URL (alongside the existing `?characterName=` param).
-- If `gh api user` fails (not logged in, no gh CLI), the agent falls back gracefully — it still opens the game without the `?gh=` param.
-- `WorldScene.js` reads `new URLSearchParams(window.location.search).get('gh')` and sends `githubUser` alongside the character name in the `player:identify` event.
+---
 
-### 2. Server stores GitHub username per socket
-- `server/index.js` stores `githubUser` on each player entry (alongside `id`, `color`, `name`).
-- If no GitHub username was sent, `githubUser` is `null`.
-- The assigned animal name is still used as the in-game display name.
+## Layout
 
-### 3. Leaderboard aggregates by GitHub profile
-- `GET /leaderboard` aggregates entries by `githubUser` when present.
-- Multiple sockets sharing the same `githubUser` have their `prsmerged` and `worldChanges` summed.
-- Players without a `githubUser` appear as individual entries keyed by their assigned name.
-- Response shape per entry: `{ displayName, githubUser, color, prsmerged, worldChanges }`.
-- `displayName` is the `githubUser` when present, otherwise the assigned animal name.
+Three panels left-to-right:
 
-### 4. One vote per GitHub profile per PR
-- Votes are keyed by `githubUser` (or fall back to socket ID if `githubUser` is null).
-- If a user's second agent tries to vote on the same PR, the vote is silently ignored (already voted).
-- The vote from their first agent remains in effect.
-- Counting (yes/no) reflects unique voters, not socket count.
+### Left panel — Agent Roster (~35% width)
+- Lists all agents discovered by scanning `agent/agents/*/character.md`
+- Each agent shows a status indicator: `● Running` (green dot) or `○ Stopped` (gray dot)
+- Selected agent is highlighted
+- Hint at bottom: `[n] new  [del] delete  [↑↓] select`
+- If no agents exist, shows a prompt to create one with `[n]`
 
-### 5. Self-voting is blocked
-- When a `pr:vote` event arrives, the server checks if the voter's `githubUser` matches the PR author's GitHub username (`pr.authorGithubUser`).
-- If they match, the vote is rejected (no-op, logged to console).
-- The PR author's GitHub username is stored on the PR entry when it is first tracked — pulled from the GitHub API (the PR's `user.login` field from the pulls endpoint).
-- PRs with `authorGithubUser: null`: self-vote blocking is skipped (can't tell who the author is).
+### Middle panel — Agent Config (~40% width)
+- Shows config for the currently selected agent
+- Displays agent name (editable via `[r]` rename)
+- Personality: presets (Diplomat/Explorer/Builder/Schemer) + Custom
+  - `[↑↓]` navigates presets; `[Enter]` applies selected preset
+  - `[e]` opens custom personality editor
+- Directives: list of up to 3
+  - `[a]` add, `[d]` delete selected, `[e]` edit selected
+- All changes save immediately to `agent/agents/<slug>/character.md`
+- Focus toggles between personality list and directives list via `[Tab]`
 
-## Edge cases
-- Agent without gh CLI: `gh api user` command fails — agent opens game without `?gh=` param. Works exactly like before.
-- Two agents same GitHub user: leaderboard shows one row, votes deduped.
-- Player with no `githubUser` votes: vote is keyed by socket ID (existing behavior).
-- PR with no `authorGithubUser`: self-vote block is not enforced (insufficient data).
-- GitHub username contains special characters: URL-encoded when passed as query param.
+### Right panel — Leaderboard (~25% width)
+- Fetches `/leaderboard` every 30 seconds
+- Shows rank, name, PRs merged, world changes
+- `[r]` to manually refresh
 
-## Definition of done
-- `npm run build` passes without errors.
-- Agent startup logs the resolved GitHub username (or "no GitHub user detected").
-- Leaderboard endpoint returns aggregated data (manually verifiable by reading the code logic).
-- Vote dedup logic is clearly keyed by `githubUser || socket.id`.
-- Self-vote block fires when `voter.githubUser === pr.authorGithubUser` (both non-null).
-- PR author stored on first `pollGitHub` that discovers the PR.
+### Bottom action bar
+- `[s]` Start selected agent
+- `[x]` Stop selected agent
+- `[Tab]` cycle focus between left/middle panels
+- `[q]` quit
+
+---
+
+## Storage Layout
+
+```
+agent/agents/
+  <slug>/
+    character.md    — same format as current character.md
+    pid             — PID of running claude process (if any), absent if stopped
+```
+
+No index file — directory scan at startup.
+
+---
+
+## character.md Format
+
+```markdown
+# Character: <Name>
+
+## Personality
+<text>
+
+## Directives
+- directive 1
+- directive 2
+```
+
+---
+
+## Agent Lifecycle
+
+### Creating
+- Press `[n]` to create a new agent
+- Prompt for a name
+- Slugify: `name.toLowerCase().replace(/\s+/g, '-')`
+- Create `agent/agents/<slug>/character.md` with Explorer preset, empty directives
+- Select the new agent immediately
+
+### Deleting
+- Press `[del]` to delete selected agent
+- If the agent is running, stop it first
+- Prompt "Delete <name>? [y/N]"
+- If confirmed: `rm -rf agent/agents/<slug>/`
+- Select the next agent in the list (or previous if it was the last)
+
+### Starting
+- Press `[s]` on a stopped agent
+- Spawns `claude --dangerously-skip-permissions /start` with cwd `agent/agents/<slug>/`
+- Detached, stdio ignored, unref'd so TUI continues
+- Write child PID to `agent/agents/<slug>/pid`
+- Status immediately updates to Running
+
+### Stopping
+- Press `[x]` on a running agent
+- Reads PID from `agent/agents/<slug>/pid`
+- Sends SIGTERM
+- Deletes the `pid` file
+- Status updates to Stopped
+
+---
+
+## PID Lifecycle
+
+- On startup: for each agent with a `pid` file, call `process.kill(pid, 0)`
+  - If it throws: process is dead → delete `pid` file, show Stopped
+  - If it succeeds: process is alive → show Running
+- Spawn: `child_process.spawn` with `{ detached: true, stdio: 'ignore' }`, then `child.unref()`
+- Stop: `process.kill(pid, 'SIGTERM')` + delete `pid` file
+
+---
+
+## Definition of Done
+
+1. TUI launches with `npm run tui` from `agent/` directory
+2. Left panel shows all agents in `agent/agents/` with correct status indicators
+3. Creating a new agent (via `[n]`) creates the directory/file structure, selects it, and shows it in the roster
+4. Editing personality or directives in the middle panel saves immediately to disk
+5. Changes persist after quitting and relaunching — confirmed by relaunch
+6. Deleting an agent removes the directory (after y/N confirm) and updates the roster
+7. Starting an agent writes a PID file; stopping it removes the PID file
+8. PID staleness check on startup: stale PIDs are cleaned up automatically
+9. Leaderboard panel fetches data and displays it (or shows error if server offline)
+10. `[Tab]` cycles focus between left roster and middle config panels
+11. No crash when there are zero agents
+12. Rename via `[r]` updates the name in `character.md` header and refreshes the roster display

@@ -1,25 +1,29 @@
 /**
- * Living Game — Personality TUI
+ * Living Game — Multi-Agent Manager TUI
  * Run: npm run tui  (from agent/ directory)
  *
  * Three panels:
- *   Personality  (top-left)   — presets + custom edit
- *   Directives   (bottom-left)— up to 3 strategic goals
- *   Leaderboard  (right)      — fetches /leaderboard every 30 s
+ *   Left   (~35%) — Agent roster with status indicators
+ *   Middle (~40%) — Agent config (personality + directives)
+ *   Right  (~25%) — Leaderboard (fetches /leaderboard every 30s)
+ *
+ * Storage: agent/agents/<slug>/character.md + pid
  */
 
 import { createRequire } from 'module';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { spawn } from 'child_process';
 
 const require = createRequire(import.meta.url);
 const blessed = require('blessed');
 
 // ── paths ────────────────────────────────────────────────────────────────────
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const CHARACTER_MD = path.join(__dirname, 'character.md');
-const SERVER_URL = process.env.SERVER_URL ||
+const AGENTS_DIR = path.join(__dirname, 'agents');
+const SERVER_URL =
+  process.env.SERVER_URL ||
   'https://living-game-server-production.up.railway.app';
 
 // ── personality presets ──────────────────────────────────────────────────────
@@ -32,12 +36,44 @@ const PRESETS = {
 
 const PRESET_NAMES = Object.keys(PRESETS);
 
-// ── character.md helpers ─────────────────────────────────────────────────────
-function readCharacter() {
-  if (!fs.existsSync(CHARACTER_MD)) {
-    return null;
+// ── agent storage helpers ────────────────────────────────────────────────────
+function ensureAgentsDir() {
+  if (!fs.existsSync(AGENTS_DIR)) {
+    fs.mkdirSync(AGENTS_DIR, { recursive: true });
   }
-  return fs.readFileSync(CHARACTER_MD, 'utf8');
+}
+
+function slugify(name) {
+  return name
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9-]/g, '');
+}
+
+function agentDir(slug) {
+  return path.join(AGENTS_DIR, slug);
+}
+
+function characterPath(slug) {
+  return path.join(agentDir(slug), 'character.md');
+}
+
+function pidPath(slug) {
+  return path.join(agentDir(slug), 'pid');
+}
+
+function defaultCharacterMd(name) {
+  return `# Character: ${name}\n\n## Personality\n${PRESETS.Explorer}\n\n## Directives\n`;
+}
+
+function readCharacterMd(slug) {
+  const p = characterPath(slug);
+  if (!fs.existsSync(p)) return null;
+  return fs.readFileSync(p, 'utf8');
+}
+
+function writeCharacterMd(slug, md) {
+  fs.writeFileSync(characterPath(slug), md, 'utf8');
 }
 
 function parseName(md) {
@@ -46,7 +82,6 @@ function parseName(md) {
 }
 
 function parseSection(md, header) {
-  // Matches ## header up to next ## or end
   const re = new RegExp(`##\\s+${header}\\s*\\n([\\s\\S]*?)(?=\\n##\\s|$)`);
   const m = md.match(re);
   return m ? m[1].trim() : null;
@@ -58,12 +93,7 @@ function updateSection(md, header, newContent) {
   if (re.test(md)) {
     return md.replace(re, replacement);
   }
-  // Section doesn't exist — append it
   return md.trimEnd() + `\n\n## ${header}\n${newContent}\n`;
-}
-
-function writeCharacter(md) {
-  fs.writeFileSync(CHARACTER_MD, md, 'utf8');
 }
 
 function parseDirectives(md) {
@@ -79,6 +109,64 @@ function directivesToMarkdown(list) {
   return list.map((d) => `- ${d}`).join('\n');
 }
 
+// ── PID helpers ──────────────────────────────────────────────────────────────
+function readPid(slug) {
+  const p = pidPath(slug);
+  if (!fs.existsSync(p)) return null;
+  const raw = fs.readFileSync(p, 'utf8').trim();
+  const n = parseInt(raw, 10);
+  return isNaN(n) ? null : n;
+}
+
+function writePid(slug, pid) {
+  fs.writeFileSync(pidPath(slug), String(pid), 'utf8');
+}
+
+function deletePid(slug) {
+  const p = pidPath(slug);
+  if (fs.existsSync(p)) fs.unlinkSync(p);
+}
+
+function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ── agent scanning ───────────────────────────────────────────────────────────
+function scanAgents() {
+  ensureAgentsDir();
+  const entries = fs.readdirSync(AGENTS_DIR, { withFileTypes: true });
+  const agents = [];
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const slug = entry.name;
+    const md = readCharacterMd(slug);
+    if (!md) continue;
+
+    const name = parseName(md);
+
+    // Check PID staleness on startup
+    const pid = readPid(slug);
+    let running = false;
+    if (pid !== null) {
+      if (isProcessAlive(pid)) {
+        running = true;
+      } else {
+        deletePid(slug);
+      }
+    }
+
+    agents.push({ slug, name, running });
+  }
+
+  return agents.sort((a, b) => a.slug.localeCompare(b.slug));
+}
+
 // ── leaderboard fetch ────────────────────────────────────────────────────────
 async function fetchLeaderboard() {
   try {
@@ -88,32 +176,30 @@ async function fetchLeaderboard() {
     if (!res.ok) return { error: `HTTP ${res.status}` };
     const data = await res.json();
     return { players: data };
-  } catch (err) {
+  } catch {
     return { error: 'Server offline' };
   }
 }
 
 // ── main ─────────────────────────────────────────────────────────────────────
 function main() {
-  const rawMd = readCharacter();
-  if (!rawMd) {
-    process.stderr.write(`Error: character.md not found at ${CHARACTER_MD}\n`);
-    process.exit(1);
-  }
+  ensureAgentsDir();
 
-  let md = rawMd;
-  const charName = parseName(md);
+  // ── mutable state ─────────────────────────────────────────────────────────
+  let agents = scanAgents();
+  let selectedIdx = 0;
+  let focusPanel = 'roster'; // 'roster' | 'config'
+  let configFocus = 'personality'; // 'personality' | 'directives'
 
-  // Ensure ## Directives section exists
-  if (!parseSection(md, 'Directives')) {
-    md = updateSection(md, 'Directives', '');
-    writeCharacter(md);
-  }
+  // Per-selected-agent state (reloaded when selection changes)
+  let currentMd = '';
+  let currentPersonality = '';
+  let directives = [];
 
   // ── screen ────────────────────────────────────────────────────────────────
   const screen = blessed.screen({
     smartCSR: true,
-    title: `Living Game — ${charName}`,
+    title: 'Living Game — Multi-Agent Manager',
   });
 
   // ── header ────────────────────────────────────────────────────────────────
@@ -122,44 +208,94 @@ function main() {
     left: 0,
     width: '100%',
     height: 3,
-    content: `{bold}{cyan-fg} Living Game  ·  Character: ${charName}{/cyan-fg}{/bold}`,
+    content:
+      '{bold}{cyan-fg} Living Game  ·  Multi-Agent Manager{/cyan-fg}{/bold}',
     tags: true,
     border: { type: 'line' },
-    style: {
-      border: { fg: 'cyan' },
-      bg: 'black',
-    },
+    style: { border: { fg: 'cyan' }, bg: 'black' },
   });
 
-  // ── left column ───────────────────────────────────────────────────────────
-  const leftWidth = '40%';
-  const topHeight = '50%';
-
-  // Personality box
-  const personalityBox = blessed.box({
+  // ── left panel — roster ───────────────────────────────────────────────────
+  const rosterBox = blessed.box({
     top: 3,
     left: 0,
-    width: leftWidth,
-    height: topHeight,
-    label: ' {bold}Personality{/bold} ',
+    width: '35%',
+    bottom: 3,
+    label: ' {bold}Agents{/bold} ',
     tags: true,
     border: { type: 'line' },
-    style: {
-      border: { fg: 'yellow' },
-      label: { fg: 'yellow' },
-    },
-    scrollable: false,
-    padding: { left: 1, right: 1 },
+    style: { border: { fg: 'cyan' }, label: { fg: 'cyan' } },
   });
 
-  // Preset list inside personality box
-  const presetList = blessed.list({
-    parent: personalityBox,
+  const rosterList = blessed.list({
+    parent: rosterBox,
     top: 0,
     left: 0,
     width: '100%-2',
-    height: PRESET_NAMES.length + 1,
-    items: PRESET_NAMES.map((n) => ` ${n}`),
+    height: '100%-3',
+    keys: true,
+    mouse: true,
+    vi: false,
+    items: [],
+    style: {
+      selected: { bg: 'cyan', fg: 'black', bold: true },
+      item: { fg: 'white' },
+    },
+  });
+
+  const rosterHint = blessed.box({
+    parent: rosterBox,
+    bottom: 0,
+    left: 0,
+    width: '100%-2',
+    height: 1,
+    content: ' [n] new  [del] delete  [s] start  [x] stop',
+    style: { fg: 'blue' },
+    tags: false,
+  });
+
+  // ── middle panel — config ─────────────────────────────────────────────────
+  const configBox = blessed.box({
+    top: 3,
+    left: '35%',
+    width: '40%',
+    bottom: 3,
+    label: ' {bold}Config{/bold} ',
+    tags: true,
+    border: { type: 'line' },
+    style: { border: { fg: 'yellow' }, label: { fg: 'yellow' } },
+  });
+
+  // Agent name + status at top of config panel
+  const agentNameBox = blessed.box({
+    parent: configBox,
+    top: 0,
+    left: 0,
+    width: '100%-2',
+    height: 2,
+    content: '',
+    tags: true,
+    style: { fg: 'white' },
+  });
+
+  // Personality section label
+  const personalityLabel = blessed.box({
+    parent: configBox,
+    top: 2,
+    left: 0,
+    width: '100%-2',
+    height: 1,
+    content: ' {yellow-fg}{bold}Personality{/bold}{/yellow-fg}  [r] rename',
+    tags: true,
+  });
+
+  const presetList = blessed.list({
+    parent: configBox,
+    top: 3,
+    left: 0,
+    width: '100%-2',
+    height: PRESET_NAMES.length + 2, // presets + Custom row
+    items: [],
     keys: true,
     mouse: true,
     vi: false,
@@ -170,21 +306,20 @@ function main() {
   });
 
   const personalityPreview = blessed.box({
-    parent: personalityBox,
-    top: PRESET_NAMES.length + 1,
+    parent: configBox,
+    top: 3 + PRESET_NAMES.length + 2,
     left: 0,
     width: '100%-2',
-    height: '100%-' + (PRESET_NAMES.length + 2),
+    height: 3,
     content: '',
     tags: false,
     scrollable: true,
-    alwaysScroll: true,
     style: { fg: 'gray' },
   });
 
   const personalityHint = blessed.box({
-    parent: personalityBox,
-    bottom: 0,
+    parent: configBox,
+    top: 3 + PRESET_NAMES.length + 2 + 3,
     left: 0,
     width: '100%-2',
     height: 1,
@@ -193,27 +328,23 @@ function main() {
     tags: false,
   });
 
-  // Directives box
-  const directivesBox = blessed.box({
-    top: 3 + topHeight,
+  // Directives section
+  const directivesLabel = blessed.box({
+    parent: configBox,
+    top: 3 + PRESET_NAMES.length + 2 + 3 + 1,
     left: 0,
-    width: leftWidth,
-    bottom: 2,
-    label: ' {bold}Directives{/bold} ',
+    width: '100%-2',
+    height: 1,
+    content: ' {green-fg}{bold}Directives{/bold}{/green-fg}',
     tags: true,
-    border: { type: 'line' },
-    style: {
-      border: { fg: 'green' },
-      label: { fg: 'green' },
-    },
   });
 
   const directivesList = blessed.list({
-    parent: directivesBox,
-    top: 0,
+    parent: configBox,
+    top: 3 + PRESET_NAMES.length + 2 + 3 + 1 + 1,
     left: 0,
     width: '100%-2',
-    height: '100%-3',
+    height: 4,
     keys: true,
     mouse: true,
     vi: false,
@@ -225,7 +356,7 @@ function main() {
   });
 
   const directivesHint = blessed.box({
-    parent: directivesBox,
+    parent: configBox,
     bottom: 0,
     left: 0,
     width: '100%-2',
@@ -235,19 +366,16 @@ function main() {
     tags: false,
   });
 
-  // ── right column — leaderboard ─────────────────────────────────────────────
+  // ── right panel — leaderboard ─────────────────────────────────────────────
   const leaderboardBox = blessed.box({
     top: 3,
-    left: leftWidth,
+    left: '75%',
     right: 0,
-    bottom: 2,
+    bottom: 3,
     label: ' {bold}Leaderboard{/bold} ',
     tags: true,
     border: { type: 'line' },
-    style: {
-      border: { fg: 'magenta' },
-      label: { fg: 'magenta' },
-    },
+    style: { border: { fg: 'magenta' }, label: { fg: 'magenta' } },
     scrollable: true,
     alwaysScroll: true,
     keys: true,
@@ -260,134 +388,21 @@ function main() {
     bottom: 0,
     left: 0,
     width: '100%',
-    height: 2,
+    height: 3,
     content:
-      ' {bold}[Tab]{/bold} switch panel   {bold}[q/{ctrl+c}]{/bold} quit   {bold}[r]{/bold} refresh leaderboard',
+      ' {bold}[s]{/bold} start  {bold}[x]{/bold} stop  {bold}[n]{/bold} new  {bold}[del]{/bold} delete  {bold}[Tab]{/bold} switch panel  {bold}[r]{/bold} refresh lb  {bold}[q]{/bold} quit',
     tags: true,
     border: { type: 'line' },
-    style: {
-      border: { fg: 'gray' },
-      fg: 'white',
-    },
+    style: { border: { fg: 'gray' }, fg: 'white' },
   });
 
   screen.append(header);
-  screen.append(personalityBox);
-  screen.append(directivesBox);
+  screen.append(rosterBox);
+  screen.append(configBox);
   screen.append(leaderboardBox);
   screen.append(footer);
 
-  // ── state ─────────────────────────────────────────────────────────────────
-  let focus = 'personality'; // 'personality' | 'directives'
-  let directives = parseDirectives(md);
-  let currentPersonality = parseSection(md, 'Personality') || '';
-
-  // Find which preset matches current personality (if any)
-  function findPresetIndex() {
-    for (let i = 0; i < PRESET_NAMES.length; i++) {
-      if (currentPersonality.trim() === PRESETS[PRESET_NAMES[i]].trim()) {
-        return i;
-      }
-    }
-    return -1; // custom
-  }
-
-  // ── personality helpers ───────────────────────────────────────────────────
-  function refreshPresetList() {
-    const idx = findPresetIndex();
-    const items = PRESET_NAMES.map((n, i) => {
-      const marker = i === idx ? '✓ ' : '  ';
-      return `${marker}${n}`;
-    });
-    items.push(findPresetIndex() === -1 ? '✓ Custom' : '  Custom');
-    presetList.setItems(items);
-    if (idx >= 0) presetList.select(idx);
-    else presetList.select(PRESET_NAMES.length);
-    personalityPreview.setContent(currentPersonality);
-    screen.render();
-  }
-
-  function applyPreset(name) {
-    if (name === 'Custom') return; // enter edit mode instead
-    const text = PRESETS[name];
-    if (!text) return;
-    currentPersonality = text;
-    md = updateSection(md, 'Personality', currentPersonality);
-    writeCharacter(md);
-    personalityPreview.setContent(currentPersonality);
-    screen.render();
-  }
-
-  // ── directives helpers ────────────────────────────────────────────────────
-  function refreshDirectivesList() {
-    const items = directives.length
-      ? directives.map((d, i) => ` ${i + 1}. ${d}`)
-      : [' (none — press a to add)'];
-    directivesList.setItems(items);
-    screen.render();
-  }
-
-  function saveDirectives() {
-    md = updateSection(md, 'Directives', directivesToMarkdown(directives));
-    writeCharacter(md);
-  }
-
-  // ── leaderboard helpers ───────────────────────────────────────────────────
-  let lbLastUpdated = null;
-
-  function renderLeaderboard(result) {
-    lbLastUpdated = new Date().toLocaleTimeString();
-    let content = '';
-
-    if (result.error) {
-      content = `\n {red-fg}${result.error}{/red-fg}\n\n Refresh with [r]`;
-    } else if (!result.players || result.players.length === 0) {
-      content = '\n {gray-fg}No data yet{/gray-fg}\n\n Refresh with [r]';
-    } else {
-      const sorted = [...result.players].sort((a, b) => {
-        const score = (p) => (p.prsmerged || 0) * 3 + (p.worldChanges || 0);
-        return score(b) - score(a);
-      });
-
-      const colW = { rank: 4, name: 14, color: 3, prs: 6, wc: 8 };
-      const header2 =
-        ' Rank  Name           PRs   Changes\n' +
-        ' ────  ─────────────  ───   ───────';
-      content = '\n' + header2 + '\n';
-
-      sorted.forEach((p, i) => {
-        const rank = String(i + 1).padEnd(colW.rank);
-        const name = (p.name || '?').slice(0, 13).padEnd(colW.name);
-        const prs = String(p.prsmerged || 0).padEnd(colW.prs);
-        const wc = String(p.worldChanges || 0);
-        const colorDot = p.color ? `{${p.color}-fg}●{/${p.color}-fg}` : ' ';
-        content += ` ${rank} ${colorDot} ${name} ${prs}  ${wc}\n`;
-      });
-    }
-
-    content += `\n\n {gray-fg}Updated: ${lbLastUpdated}{/gray-fg}`;
-    leaderboardBox.setContent(content);
-    screen.render();
-  }
-
-  async function refreshLeaderboard() {
-    leaderboardBox.setContent('\n {yellow-fg}Loading…{/yellow-fg}');
-    screen.render();
-    const result = await fetchLeaderboard();
-    renderLeaderboard(result);
-  }
-
-  // ── focus helpers ─────────────────────────────────────────────────────────
-  function setFocus(panel) {
-    focus = panel;
-    personalityBox.style.border.fg = panel === 'personality' ? 'yellow' : 'gray';
-    directivesBox.style.border.fg = panel === 'directives' ? 'green' : 'gray';
-    if (panel === 'personality') presetList.focus();
-    else directivesList.focus();
-    screen.render();
-  }
-
-  // ── inline prompt helper ──────────────────────────────────────────────────
+  // ── prompt helper ─────────────────────────────────────────────────────────
   function prompt(label, prefill, cb) {
     const dialog = blessed.prompt({
       parent: screen,
@@ -407,54 +422,384 @@ function main() {
     screen.render();
   }
 
-  // ── key bindings ──────────────────────────────────────────────────────────
+  // ── roster helpers ────────────────────────────────────────────────────────
+  function refreshRoster() {
+    if (agents.length === 0) {
+      rosterList.setItems([' (no agents — press n)']);
+    } else {
+      const items = agents.map((a) => {
+        const dot = a.running ? '● ' : '○ ';
+        return ` ${dot}${a.name}`;
+      });
+      rosterList.setItems(items);
+    }
+    if (selectedIdx >= agents.length) {
+      selectedIdx = Math.max(0, agents.length - 1);
+    }
+    if (agents.length > 0) rosterList.select(selectedIdx);
+    screen.render();
+  }
+
+  // ── config helpers ────────────────────────────────────────────────────────
+  function loadSelectedAgent() {
+    if (agents.length === 0) {
+      agentNameBox.setContent(' {gray-fg}No agents — press [n] to create one{/gray-fg}');
+      presetList.setItems([]);
+      personalityPreview.setContent('');
+      directivesList.setItems([]);
+      screen.render();
+      return;
+    }
+
+    const agent = agents[selectedIdx];
+    const md = readCharacterMd(agent.slug);
+    if (!md) return;
+
+    currentMd = md;
+    currentPersonality = parseSection(md, 'Personality') || '';
+    directives = parseDirectives(md);
+
+    const statusStr = agent.running
+      ? '{green-fg}● Running{/green-fg}'
+      : '{gray-fg}○ Stopped{/gray-fg}';
+    agentNameBox.setContent(` {bold}${agent.name}{/bold}   ${statusStr}`);
+
+    refreshPresetList();
+    refreshDirectivesList();
+    screen.render();
+  }
+
+  function findPresetIndex() {
+    for (let i = 0; i < PRESET_NAMES.length; i++) {
+      if (currentPersonality.trim() === PRESETS[PRESET_NAMES[i]].trim()) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  function refreshPresetList() {
+    const idx = findPresetIndex();
+    const items = PRESET_NAMES.map((n, i) => {
+      const marker = i === idx ? '✓ ' : '  ';
+      return `${marker}${n}`;
+    });
+    items.push(idx === -1 ? '✓ Custom' : '  Custom');
+    presetList.setItems(items);
+    if (idx >= 0) presetList.select(idx);
+    else presetList.select(PRESET_NAMES.length);
+    // Show first 3 lines of personality as preview
+    personalityPreview.setContent(
+      currentPersonality.split('\n').slice(0, 3).join('\n'),
+    );
+    screen.render();
+  }
+
+  function applyPreset(name) {
+    if (name === 'Custom') return;
+    const text = PRESETS[name];
+    if (!text) return;
+    currentPersonality = text;
+    savePersonality();
+    refreshPresetList();
+  }
+
+  function savePersonality() {
+    if (agents.length === 0) return;
+    const agent = agents[selectedIdx];
+    currentMd = updateSection(currentMd, 'Personality', currentPersonality);
+    writeCharacterMd(agent.slug, currentMd);
+  }
+
+  function refreshDirectivesList() {
+    const items = directives.length
+      ? directives.map((d, i) => ` ${i + 1}. ${d}`)
+      : [' (none — press a to add)'];
+    directivesList.setItems(items);
+    screen.render();
+  }
+
+  function saveDirectives() {
+    if (agents.length === 0) return;
+    const agent = agents[selectedIdx];
+    currentMd = updateSection(
+      currentMd,
+      'Directives',
+      directivesToMarkdown(directives),
+    );
+    writeCharacterMd(agent.slug, currentMd);
+  }
+
+  // ── focus helpers ─────────────────────────────────────────────────────────
+  function setFocusPanel(panel) {
+    focusPanel = panel;
+    rosterBox.style.border.fg = panel === 'roster' ? 'cyan' : 'gray';
+    configBox.style.border.fg = panel === 'config' ? 'yellow' : 'gray';
+    if (panel === 'roster') {
+      rosterList.focus();
+    } else {
+      if (configFocus === 'personality') presetList.focus();
+      else directivesList.focus();
+    }
+    screen.render();
+  }
+
+  function setConfigFocus(sub) {
+    configFocus = sub;
+    focusPanel = 'config';
+    configBox.style.border.fg = 'yellow';
+    rosterBox.style.border.fg = 'gray';
+    if (sub === 'personality') presetList.focus();
+    else directivesList.focus();
+    screen.render();
+  }
+
+  // ── leaderboard helpers ───────────────────────────────────────────────────
+  let lbLastUpdated = null;
+
+  function renderLeaderboard(result) {
+    lbLastUpdated = new Date().toLocaleTimeString();
+    let content = '';
+
+    if (result.error) {
+      content = `\n {red-fg}${result.error}{/red-fg}\n\n Refresh with [r]`;
+    } else if (!result.players || result.players.length === 0) {
+      content = '\n {gray-fg}No data yet{/gray-fg}\n\n Refresh with [r]';
+    } else {
+      const sorted = [...result.players].sort((a, b) => {
+        const score = (p) => (p.prsmerged || 0) * 3 + (p.worldChanges || 0);
+        return score(b) - score(a);
+      });
+
+      const hdr =
+        ' Rank  Name           PRs   Changes\n' +
+        ' ────  ─────────────  ───   ───────';
+      content = '\n' + hdr + '\n';
+
+      sorted.forEach((p, i) => {
+        const rank = String(i + 1).padEnd(4);
+        const name = (p.displayName || p.name || '?').slice(0, 13).padEnd(14);
+        const prs = String(p.prsmerged || 0).padEnd(6);
+        const wc = String(p.worldChanges || 0);
+        const colorDot = p.color ? `{${p.color}-fg}●{/${p.color}-fg}` : ' ';
+        content += ` ${rank} ${colorDot} ${name} ${prs}  ${wc}\n`;
+      });
+    }
+
+    content += `\n\n {gray-fg}Updated: ${lbLastUpdated}{/gray-fg}`;
+    leaderboardBox.tags = true;
+    leaderboardBox.setContent(content);
+    screen.render();
+  }
+
+  async function refreshLeaderboard() {
+    leaderboardBox.tags = true;
+    leaderboardBox.setContent('\n {yellow-fg}Loading…{/yellow-fg}');
+    screen.render();
+    const result = await fetchLeaderboard();
+    renderLeaderboard(result);
+  }
+
+  // ── agent operations ──────────────────────────────────────────────────────
+  function createAgent(name) {
+    const slug = slugify(name);
+    if (!slug) return;
+    const dir = agentDir(slug);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+      writeCharacterMd(slug, defaultCharacterMd(name));
+    }
+    agents = scanAgents();
+    const newIdx = agents.findIndex((a) => a.slug === slug);
+    selectedIdx = newIdx >= 0 ? newIdx : 0;
+    refreshRoster();
+    loadSelectedAgent();
+  }
+
+  function deleteAgent() {
+    if (agents.length === 0) return;
+    const agent = agents[selectedIdx];
+
+    // Stop first if running
+    if (agent.running) {
+      stopAgent(agent.slug);
+    }
+
+    prompt(`Delete ${agent.name}? [y/N]`, '', (val) => {
+      if (val.toLowerCase() !== 'y') return;
+      fs.rmSync(agentDir(agent.slug), { recursive: true, force: true });
+      agents = scanAgents();
+      selectedIdx = Math.min(selectedIdx, Math.max(0, agents.length - 1));
+      refreshRoster();
+      loadSelectedAgent();
+    });
+  }
+
+  function startAgent(slug) {
+    // Already running?
+    const existingPid = readPid(slug);
+    if (existingPid !== null && isProcessAlive(existingPid)) return;
+
+    const dir = agentDir(slug);
+    const child = spawn(
+      'claude',
+      ['--dangerously-skip-permissions', '/start'],
+      {
+        cwd: dir,
+        detached: true,
+        stdio: 'ignore',
+      },
+    );
+    child.unref();
+    writePid(slug, child.pid);
+
+    const agentEntry = agents.find((a) => a.slug === slug);
+    if (agentEntry) agentEntry.running = true;
+    refreshRoster();
+    loadSelectedAgent();
+  }
+
+  function stopAgent(slug) {
+    const pid = readPid(slug);
+    if (pid === null) return;
+    try {
+      process.kill(pid, 'SIGTERM');
+    } catch {
+      // Already dead — that's fine
+    }
+    deletePid(slug);
+
+    const agentEntry = agents.find((a) => a.slug === slug);
+    if (agentEntry) agentEntry.running = false;
+    refreshRoster();
+    loadSelectedAgent();
+  }
+
+  function renameAgent() {
+    if (agents.length === 0) return;
+    const agent = agents[selectedIdx];
+    prompt('New name', agent.name, (val) => {
+      if (!val || val === agent.name) return;
+      let md = readCharacterMd(agent.slug);
+      if (!md) return;
+      md = md.replace(/^#\s+Character:\s*.+/m, `# Character: ${val}`);
+      writeCharacterMd(agent.slug, md);
+      agents = scanAgents();
+      const newIdx = agents.findIndex((a) => a.slug === agent.slug);
+      selectedIdx = newIdx >= 0 ? newIdx : 0;
+      refreshRoster();
+      loadSelectedAgent();
+    });
+  }
+
+  // ── key bindings — global ─────────────────────────────────────────────────
   screen.key(['q', 'C-c'], () => {
     screen.destroy();
     process.exit(0);
   });
 
   screen.key(['tab'], () => {
-    setFocus(focus === 'personality' ? 'directives' : 'personality');
+    if (focusPanel === 'roster') setFocusPanel('config');
+    else setFocusPanel('roster');
   });
 
-  screen.key(['r'], () => {
-    refreshLeaderboard();
+  screen.key(['r'], () => refreshLeaderboard());
+
+  screen.key(['s'], () => {
+    if (agents.length === 0) return;
+    startAgent(agents[selectedIdx].slug);
   });
 
-  // Personality panel keys
+  screen.key(['x'], () => {
+    if (agents.length === 0) return;
+    stopAgent(agents[selectedIdx].slug);
+  });
+
+  screen.key(['n'], () => {
+    prompt('Agent name', '', (val) => {
+      if (val) createAgent(val);
+    });
+  });
+
+  screen.key(['delete', 'backspace'], () => deleteAgent());
+
+  // ── key bindings — roster list ─────────────────────────────────────────────
+  rosterList.key(['up', 'k'], () => {
+    setImmediate(() => {
+      const idx = rosterList.selected;
+      if (idx !== selectedIdx && idx < agents.length) {
+        selectedIdx = idx;
+        loadSelectedAgent();
+      }
+    });
+  });
+
+  rosterList.key(['down', 'j'], () => {
+    setImmediate(() => {
+      const idx = rosterList.selected;
+      if (idx !== selectedIdx && idx < agents.length) {
+        selectedIdx = idx;
+        loadSelectedAgent();
+      }
+    });
+  });
+
+  rosterList.on('select', (item, index) => {
+    if (index < agents.length) {
+      selectedIdx = index;
+      loadSelectedAgent();
+    }
+  });
+
+  rosterList.key(['tab'], () => setFocusPanel('config'));
+  rosterList.key(['n'], () => {
+    prompt('Agent name', '', (val) => {
+      if (val) createAgent(val);
+    });
+  });
+  rosterList.key(['delete', 'backspace'], () => deleteAgent());
+  rosterList.key(['s'], () => {
+    if (agents.length > 0) startAgent(agents[selectedIdx].slug);
+  });
+  rosterList.key(['x'], () => {
+    if (agents.length > 0) stopAgent(agents[selectedIdx].slug);
+  });
+
+  // ── key bindings — preset list (personality) ───────────────────────────────
   presetList.key(['enter'], () => {
+    if (agents.length === 0) return;
     const sel = presetList.selected;
     const name = sel < PRESET_NAMES.length ? PRESET_NAMES[sel] : 'Custom';
     if (name === 'Custom') {
       prompt('Custom personality', currentPersonality, (val) => {
         if (val) {
           currentPersonality = val;
-          md = updateSection(md, 'Personality', currentPersonality);
-          writeCharacter(md);
-          personalityPreview.setContent(currentPersonality);
+          savePersonality();
           refreshPresetList();
         }
       });
     } else {
       applyPreset(name);
-      refreshPresetList();
     }
   });
 
   presetList.key(['e'], () => {
+    if (agents.length === 0) return;
     prompt('Custom personality', currentPersonality, (val) => {
       if (val) {
         currentPersonality = val;
-        md = updateSection(md, 'Personality', currentPersonality);
-        writeCharacter(md);
-        personalityPreview.setContent(currentPersonality);
+        savePersonality();
         refreshPresetList();
       }
     });
   });
 
-  // Directives panel keys
+  presetList.key(['r'], () => renameAgent());
+  presetList.key(['tab'], () => setConfigFocus('directives'));
+
+  // ── key bindings — directives list ────────────────────────────────────────
   directivesList.key(['a'], () => {
+    if (agents.length === 0) return;
     if (directives.length >= 3) {
       directivesHint.setContent(' {red-fg}Max 3 directives{/red-fg}');
       directivesHint.tags = true;
@@ -478,7 +823,7 @@ function main() {
   });
 
   directivesList.key(['d'], () => {
-    if (directives.length === 0) return;
+    if (agents.length === 0 || directives.length === 0) return;
     const sel = directivesList.selected;
     if (sel >= directives.length) return;
     directives.splice(sel, 1);
@@ -487,7 +832,7 @@ function main() {
   });
 
   directivesList.key(['e'], () => {
-    if (directives.length === 0) return;
+    if (agents.length === 0 || directives.length === 0) return;
     const sel = directivesList.selected;
     if (sel >= directives.length) return;
     prompt('Edit directive', directives[sel], (val) => {
@@ -499,18 +844,16 @@ function main() {
     });
   });
 
-  // Tab between panels (from list widgets too)
-  presetList.key(['tab'], () => setFocus('directives'));
-  directivesList.key(['tab'], () => setFocus('personality'));
+  directivesList.key(['r'], () => renameAgent());
+  directivesList.key(['tab'], () => setConfigFocus('personality'));
 
   // ── initial render ────────────────────────────────────────────────────────
-  refreshPresetList();
-  refreshDirectivesList();
-  setFocus('personality');
+  refreshRoster();
+  loadSelectedAgent();
+  setFocusPanel('roster');
 
   refreshLeaderboard();
   const lbInterval = setInterval(refreshLeaderboard, 30_000);
-
   screen.on('destroy', () => clearInterval(lbInterval));
   screen.render();
 }
