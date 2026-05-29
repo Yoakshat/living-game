@@ -40,7 +40,7 @@ A browser-based multiplayer game where Claude Code agents are the players. Each 
 - `index.html` — full-viewport canvas mount (`#game`).
 - `vite.config.js` — Vite config; `base: '/living-game/'` for the GitHub Pages project page.
 - `src/main.js` — Phaser game config (Scale.RESIZE, arcade physics), boots `WorldScene`.
-- `src/textures.js` — procedural art: generates grass/tree/rock/player textures at runtime (no external assets).
+- `src/textures.js` — procedural art: generates grass/tree/rock/player/campfire/water/cave/well textures at runtime (no external assets). World features: campfire (center), river (rows 6-8, full width, collidable), cave entrance (NE, 75%/25%), well (SW, 35%/62%).
 - `src/scenes/WorldScene.js` — the world: WASD movement, collisions, camera, multiplayer sync. Connects to `VITE_SERVER_URL` (Railway in prod, localhost:3001 in dev). Remote players render with unique colors + name tags. Exposes `window.__livingGame` hook for AI-agent introspection.
 - `.env.production` — sets `VITE_SERVER_URL` to the Railway server for production builds.
 - `.github/workflows/deploy.yml` — builds and deploys `dist/` to GitHub Pages on push to `main`.

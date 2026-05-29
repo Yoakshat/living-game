@@ -1,38 +1,43 @@
-# Acceptance: auto-loop-start
+# Acceptance: controls-split
 
-## What this task is about
+## What this task achieves
 
-When a user types `/start` in Claude Code, the game loop runs continuously and autonomously — screenshot, vote, act, reschedule — without any user interaction, until they type `/end`.
+Agents proposing PRs that add new game mechanics (e.g. new movement modes, new actions) need to update
+the controls documentation alongside `src/` code. Today `controls.md` lives at the repo root, so CI
+blocks any PR that touches it. This task moves the controls doc inside `src/` so agents can update it
+in the same PR as their code change.
 
-## User flows
+## Definition of done (from the perspective of an agent or repo owner)
 
-### Starting the game
-1. User types `/start` in Claude Code.
-2. Agent checks if agent server is running, starts it if not.
-3. Agent reads character.md and controls.md.
-4. Agent enters the loop: screenshot → check votes → act in world.
-5. At the END of each iteration, the agent calls `Skill({skill: "loop", args: "/start"})` to reschedule itself via the harness ScheduleWakeup mechanism.
-6. User does nothing. Loop continues autonomously across turns.
+### File layout
+1. `src/controls.md` exists and contains the full game-inputs reference:
+   - `## Agent Actions` section (the /press, /tap, /click, /drag, /screenshot, /health, /quit API)
+   - `## Current Controls` section (WASD table + duration guide)
+   - `## Tips for agents` section
+2. `agent/governance.md` exists and contains only the PR governance section:
+   - `## PR Governance` (how to propose, review, and auto-merge)
+   - The "What counts as a good PR" checklist, updated to reference `src/controls.md`
+3. Root-level `controls.md` is **gone** — no file at that path.
 
-### Stopping the game
-1. User types `/end` in Claude Code.
-2. `/end` command does NOT reschedule the loop (no loop skill call).
-3. `/end` calls `curl -s -X POST http://localhost:7979/quit` to shut down the agent server.
-4. Agent says a closing in-character line.
-5. Loop stops. No further screenshots or actions happen.
+### start.md (global Claude Code command)
+4. `~/.claude/commands/start.md` references `src/controls.md` for game inputs — not `controls.md`.
+5. `~/.claude/commands/start.md` references `agent/governance.md` for meta-operations (propose/review).
+6. The "Hard limits" section in `start.md` explicitly lists `src/controls.md` as the one controls file
+   agents may edit, alongside other `src/` files.
+7. The in-loop reminder to "use only what controls.md describes" now points to `src/controls.md`.
+
+### CI behaviour
+8. A PR that changes only `src/controls.md` (and other `src/` files) passes the scope-check step.
+9. A PR that changes `agent/governance.md` fails the scope-check step with an appropriate error message.
+10. The CI `ci.yml` logic is verified correct — the `grep -v '^src/'` pattern correctly allows
+    `src/controls.md` and blocks `agent/governance.md`.
+
+### Build
+11. `npm run build` still passes after all changes — no import references `controls.md` in JS source.
 
 ## Edge cases
-
-- If agent server is already running when `/start` is called, it skips setup and goes straight to loop.
-- If agent server is already stopped when `/end` is called, the quit call may fail gracefully — that's fine.
-- Claude must never pause mid-loop to ask the user a question. If stuck (two identical screenshots), pick a random different direction and continue.
-- Vote decisions are made in character without hesitation.
-
-## Definition of done
-
-1. `~/.claude/commands/start.md` ends each loop iteration by calling `Skill({skill: "loop", args: "/start"})`.
-2. `~/.claude/commands/start.md` has NO old "Stopping" section with `curl -X POST http://localhost:7979/quit` — replaced with a note: "To stop, type `/end` in Claude Code."
-3. `~/.claude/commands/start.md` contains NO question-asking language mid-loop (no "ask", "wait for user", "check with user", etc.).
-4. `~/.claude/commands/end.md` exists with: (a) no loop skill call, (b) `curl -s -X POST http://localhost:7979/quit`, (c) an in-character closing line.
-5. `agent/README.md` exists and documents `/start` and `/end`.
-6. `npm run build` passes.
+- `src/controls.md` is a markdown file, not a JS import — the Vite build must not break.
+- The "What counts as a good PR" checklist currently says "`controls.md` updated if any mechanic changed"
+  — this must be updated to `src/controls.md`.
+- `start.md` has two references to controls: one in the setup instructions and one in-loop. Both must
+  be updated.
