@@ -501,6 +501,46 @@ function makeWellTexture(scene, key) {
   return { w: WELL_W, h: WELL_H };
 }
 
+// --- Stone bridge tile -----------------------------------------------------
+// A single horizontal tile of stone bridge planks. Laid across the river to
+// form a crossing. Warm grey stone with wood-plank detail and a subtle shadow
+// along the water edges.
+function makeBridgeTexture(scene, key) {
+  const g = scene.make.graphics({ x: 0, y: 0, add: false });
+
+  // Stone foundation slab — warm grey base.
+  g.fillStyle(0x8a7e6e, 1);
+  g.fillRect(0, 0, TILE, TILE);
+
+  // Slightly darker stone veining across the slab.
+  g.fillStyle(0x6e6258, 0.5);
+  g.fillRect(0, TILE * 0.3, TILE, 2);
+  g.fillRect(0, TILE * 0.65, TILE, 2);
+  g.fillStyle(0x6e6258, 0.3);
+  g.fillRect(TILE * 0.25, 0, 2, TILE);
+  g.fillRect(TILE * 0.72, 0, 2, TILE);
+
+  // Top highlight edge (lit from above).
+  g.fillStyle(0xb0a898, 0.7);
+  g.fillRect(0, 0, TILE, 3);
+
+  // Bottom shadow edge (water shadow below).
+  g.fillStyle(0x3a322a, 0.4);
+  g.fillRect(0, TILE - 4, TILE, 4);
+
+  // Left / right mortar lines.
+  g.fillStyle(0x5a5048, 0.5);
+  g.fillRect(0, 0, 2, TILE);
+  g.fillRect(TILE - 2, 0, 2, TILE);
+
+  // A small worn patch in the center — frequent foot traffic.
+  g.fillStyle(0xa09080, 0.3);
+  g.fillEllipse(TILE / 2, TILE / 2, TILE * 0.55, TILE * 0.45);
+
+  g.generateTexture(key, TILE, TILE);
+  g.destroy();
+}
+
 // Generate everything; returns metadata the scene needs for sizing/bodies.
 export function generateTextures(scene) {
   const grassVariants = 4;
@@ -519,6 +559,9 @@ export function generateTextures(scene) {
   }
   const cave = makeCaveTexture(scene, 'cave');
   const well = makeWellTexture(scene, 'well');
+
+  // Stone bridge tile (used for the cave river crossing).
+  makeBridgeTexture(scene, 'bridge');
 
   return {
     tile: TILE,

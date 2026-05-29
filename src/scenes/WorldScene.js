@@ -82,6 +82,10 @@ export default class WorldScene extends Phaser.Scene {
     // Tiles row 6-8 (0-indexed), full width. Static bodies block passage.
     this.buildRiver(T);
 
+    // --- Stone bridge (crossing the river near the cave) --------------------
+    // Three tile columns left open in the river; bridge tiles laid on top.
+    this.buildBridge(T);
+
     // --- Cave entrance (upper-right area) -----------------------------------
     // Purely visual landmark — no collision.
     const caveX = Math.round(this.worldW * 0.75);
@@ -421,11 +425,18 @@ export default class WorldScene extends Phaser.Scene {
     r.refreshBody();
   }
 
+  // Tile columns that are open for the stone bridge crossing (no water collision).
+  // Centered around tile x=24 (cave entrance x) so the path leads straight to the cave.
+  static get BRIDGE_COLS() { return [22, 23, 24]; }
+
   // Build a horizontal river: tile rows RIVER_ROW_START to RIVER_ROW_END (inclusive).
   // Each tile is a visual image + a static physics body blocking passage.
+  // Bridge columns are left open (visual water only, no collision body) so the
+  // stone bridge overlay lets players cross.
   buildRiver(T) {
     const RIVER_ROW_START = 6;
     const RIVER_ROW_END = 8; // 3 tiles tall
+    const bridgeCols = new Set(WorldScene.BRIDGE_COLS);
     for (let ty = RIVER_ROW_START; ty <= RIVER_ROW_END; ty++) {
       for (let tx = 0; tx < WORLD_TILES_X; tx++) {
         const v = (tx * 3 + ty * 7) % this.meta.waterVariants;
@@ -437,6 +448,9 @@ export default class WorldScene extends Phaser.Scene {
           .setOrigin(0, 0)
           .setDepth(wy);
 
+        // Bridge columns: no collision body — players can walk across.
+        if (bridgeCols.has(tx)) continue;
+
         // Physics body to block player passage through the water.
         const body = this.obstacles.create(wx + T / 2, wy + T / 2, 'water-' + v);
         body.setOrigin(0.5, 0.5);
@@ -444,6 +458,24 @@ export default class WorldScene extends Phaser.Scene {
         body.setDepth(wy);
         body.setAlpha(0); // invisible — the visual image above handles rendering
         body.refreshBody();
+      }
+    }
+  }
+
+  // Lay stone bridge tiles over the open gap in the river.
+  // The bridge tiles render above the water and below any player/obstacle on top.
+  buildBridge(T) {
+    const RIVER_ROW_START = 6;
+    const RIVER_ROW_END = 8;
+    for (const tx of WorldScene.BRIDGE_COLS) {
+      for (let ty = RIVER_ROW_START; ty <= RIVER_ROW_END; ty++) {
+        const wx = tx * T;
+        const wy = ty * T;
+        // Bridge tile sits above water (depth wy + 1) but below players.
+        this.add
+          .image(wx, wy, 'bridge')
+          .setOrigin(0, 0)
+          .setDepth(wy + 1);
       }
     }
   }
