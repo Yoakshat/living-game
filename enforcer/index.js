@@ -300,10 +300,158 @@ async function analyzePR(pr) {
   inFlight.delete(key);
 }
 
+// --- GitHub governance helpers ----------------------------------------------
+
+async function githubRequest(path, options = {}) {
+  const res = await fetch(`https://api.github.com/repos/${GITHUB_REPO}${path}`, {
+    ...options,
+    headers: {
+      Authorization: `token ${GITHUB_TOKEN}`,
+      'User-Agent': 'living-game-enforcer',
+      Accept: 'application/vnd.github+json',
+      'Content-Type': 'application/json',
+      ...(options.headers || {}),
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`GitHub API ${path} HTTP ${res.status}: ${text.slice(0, 200)}`);
+  }
+  return res.status === 204 ? null : await res.json();
+}
+
+async function getPRDetails(prNumber) {
+  try { return await githubRequest(`/pulls/${prNumber}`); }
+  catch { return null; }
+}
+
+async function getCIStatus(sha) {
+  try {
+    const data = await githubRequest(`/commits/${sha}/check-runs`);
+    if (!data || !data.total_count) return 'pending';
+    const runs = data.check_runs;
+    if (runs.some(r => ['failure', 'timed_out', 'cancelled'].includes(r.conclusion))) return 'failed';
+    if (runs.some(r => r.status === 'in_progress' || r.status === 'queued')) return 'pending';
+    return 'passed';
+  } catch { return 'pending'; }
+}
+
+async function mergePR(prNumber, title) {
+  await githubRequest(`/pulls/${prNumber}/merge`, {
+    method: 'PUT',
+    body: JSON.stringify({ merge_method: 'squash', commit_title: `${title} (#${prNumber})` }),
+  });
+  console.log(`[governance] PR #${prNumber} merged`);
+}
+
+async function closePR(prNumber, comment) {
+  await githubRequest(`/pulls/${prNumber}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ state: 'closed' }),
+  });
+  if (comment) await postGitHubComment(prNumber, comment);
+  console.log(`[governance] PR #${prNumber} closed`);
+}
+
+// --- Governance loop --------------------------------------------------------
+
+const ENFORCER_TIMEOUT_MS = 30 * 60 * 1000;
+
+async function governPR(pr, quorum, freshTallyFn) {
+  const prData = await getPRDetails(pr.number);
+  if (!prData || prData.state !== 'open') return;
+
+  // Enforcer:block → close
+  if (pr.enforcerState === 'enforcer:block') {
+    await closePR(pr.number, `**Enforcer verdict: blocked.** ${pr.enforcerComment || ''}`);
+    return;
+  }
+
+  // Enforcer review in progress → check timeout
+  if (pr.enforcerState === 'needs-enforcer-review') {
+    if (pr.enforcerPendingSince) {
+      const elapsed = Date.now() - new Date(pr.enforcerPendingSince).getTime();
+      if (elapsed >= ENFORCER_TIMEOUT_MS) {
+        await closePR(pr.number, `Enforcer unavailable — closed after ${Math.round(elapsed / 60000)} minutes waiting for verdict. Re-open when the enforcer is back online.`);
+      }
+    }
+    return;
+  }
+
+  // Sync SHA — wipes votes if pushed after last tally
+  const currentSha = prData.head.sha;
+  const syncResult = await serverFetch('/sync-pr', {
+    method: 'POST',
+    body: JSON.stringify({ prNumber: pr.number, sha: currentSha }),
+  }).catch(() => ({ status: 'error' }));
+  if (syncResult.status === 'enforcer-pending') return;
+
+  // Re-fetch fresh tally after sync (votes may have been wiped)
+  const fresh = await freshTallyFn();
+  const freshPR = (fresh.prs || []).find(p => p.number === pr.number);
+  if (!freshPR || freshPR.enforcerState === 'needs-enforcer-review') return;
+
+  // Merge conflict check
+  if (prData.mergeable === false) {
+    const alreadyCommented = await githubRequest(`/issues/${pr.number}/comments`)
+      .then(cs => cs.some(c => c.body.includes('branch has conflicts'))).catch(() => false);
+    if (!alreadyCommented) await postGitHubComment(pr.number, 'Branch has conflicts — update and push to restart voting.');
+    return;
+  }
+  if (prData.mergeable === null) return; // GitHub still computing
+
+  // CI check
+  const ci = await getCIStatus(freshPR.currentSha);
+  if (ci === 'failed') { await closePR(pr.number, 'Closing — CI failed. Fix the build errors and resubmit.'); return; }
+  if (ci === 'pending') return;
+
+  // Enforcer approved → merge
+  if (freshPR.enforcerState === 'enforcer:approve') { await mergePR(pr.number, prData.title); return; }
+
+  const { yesVotes: yes, noVotes: no, totalVotes: total } = freshPR;
+  console.log(`[governance] PR #${pr.number}: ${yes}y/${no}n (quorum=${quorum})`);
+
+  if (total >= quorum) {
+    if (yes * 3 >= total * 2) {
+      await mergePR(pr.number, prData.title);
+    } else {
+      await closePR(pr.number, `Vote closed: **${yes} yes / ${no} no** (quorum was ${quorum}). Approval below 2/3 — closing. Fix and resubmit when ready.`);
+    }
+  } else {
+    // Stale after 48h
+    const ageHours = (Date.now() - new Date(pr.openedAt).getTime()) / 3_600_000;
+    if (ageHours >= 48) {
+      await closePR(pr.number, `Closed after ${Math.round(ageHours)}h with insufficient votes (${total}/${quorum} needed). Resubmit when more agents are active.`);
+    }
+  }
+}
+
+async function governancePoll(tally) {
+  const quorum = Math.max(Math.ceil((tally.activeAgents || 0) * 0.05), 1);
+  const prs = (tally.prs || []).filter(pr => pr.number);
+  if (prs.length === 0) {
+    console.log('[governance] No open PRs to govern.');
+    return;
+  }
+
+  console.log(`[governance] ${prs.length} tracked PR(s), quorum=${quorum}`);
+
+  // Cache one fresh tally per governance cycle to avoid hammering the server
+  let cachedFresh = null;
+  const freshTallyFn = async () => {
+    if (!cachedFresh) cachedFresh = await serverFetch('/vote-tally');
+    return cachedFresh;
+  };
+
+  for (const pr of prs) {
+    try { await governPR(pr, quorum, freshTallyFn); }
+    catch (err) { console.error(`[governance] PR #${pr.number} error: ${err.message}`); }
+  }
+}
+
 // --- Polling loop -----------------------------------------------------------
 
 async function poll() {
-  console.log('[enforcer] Polling /vote-tally...');
   let tally;
   try {
     tally = await serverFetch('/vote-tally');
@@ -312,25 +460,20 @@ async function poll() {
     return;
   }
 
-  const pendingPRs = (tally.prs || []).filter(
-    (pr) => pr.enforcerState === 'needs-enforcer-review'
-  );
-
-  if (pendingPRs.length === 0) {
-    console.log('[enforcer] No PRs pending enforcer review.');
-    return;
+  // Run enforcer review for PRs needing diff analysis
+  const pendingEnforcer = (tally.prs || []).filter(pr => pr.enforcerState === 'needs-enforcer-review');
+  if (pendingEnforcer.length > 0) {
+    console.log(`[enforcer] ${pendingEnforcer.length} PR(s) need enforcer review.`);
+    await Promise.allSettled(pendingEnforcer.map(pr => analyzePR(pr)));
   }
 
-  console.log(`[enforcer] ${pendingPRs.length} PR(s) need enforcer review.`);
-
-  // Process all pending PRs concurrently (each has its own timeout)
-  await Promise.allSettled(pendingPRs.map((pr) => analyzePR(pr)));
+  // Run governance (merge/close based on votes)
+  await governancePoll(tally);
 }
 
 async function runLoop() {
   console.log(`[enforcer] Starting. SERVER_URL=${SERVER_URL} POLL_INTERVAL=${POLL_INTERVAL_MS}ms`);
 
-  // Run immediately on start, then on interval
   await poll();
   setInterval(() => {
     poll().catch((err) => console.error('[enforcer] Unhandled poll error:', err));
