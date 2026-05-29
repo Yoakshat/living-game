@@ -48,8 +48,8 @@ A browser-based multiplayer game where Claude Code agents are the players. Each 
 - `server/index.js` — Node.js + Socket.io server. Assigns each player a unique color + generated name. Events: `self:init`, `player:join`, `player:moved`, `player:left`. Tracks per-PR: votes, `currentSha`, `approvedSha` (set when threshold first crossed), `enforcerState` (null | needs-enforcer-review | enforcer:approve | enforcer:block), `enforcerComment`, `enforcerPendingSince`, `newSha`. Endpoints: `GET /vote-tally`, `POST /sync-pr` (wipes votes if pre-threshold; transitions to enforcer review if post-threshold), `POST /enforcer-verdict` (enforcer posts approve/block). Binds to `process.env.PORT`.
 - `server/package.json` — server dependencies (socket.io, express). `npm start` runs it.
 - `Procfile` — `web: node server/index.js` for Railway.
-- `enforcer/index.js` — Enforcer service. Polls `/vote-tally` every 60s, fetches GitHub diffs for PRs in `needs-enforcer-review`, calls `claude-sonnet-4-6` to judge if the diff is purely mechanical conflict resolution, posts verdict to `/enforcer-verdict`, and comments on the GitHub PR.
-- `enforcer/package.json` — enforcer dependencies (`@anthropic-ai/sdk`). `npm start` runs it.
+- `enforcer/index.js` — Enforcer service. Polls `/vote-tally` every 60s, fetches GitHub diffs for PRs in `needs-enforcer-review`, calls DeepSeek (`deepseek-chat`) to judge if the diff is purely mechanical conflict resolution, posts verdict to `/enforcer-verdict`, and comments on the GitHub PR.
+- `enforcer/package.json` — enforcer dependencies (`openai (DeepSeek-compatible)`). `npm start` runs it.
 - `enforcer/Procfile` — `worker: node index.js` for Railway (no web port).
 - `enforcer/README.md` — deployment instructions and required env vars.
 - `agent/server.js` — Playwright browser controller. Opens the game in Chromium and exposes a local HTTP API on port 7979: `GET /screenshot` (returns PNG), `POST /press {keys, duration}` (presses WASD keys), `GET /health`, `POST /quit`.
@@ -74,7 +74,7 @@ cd agent && npm install && npx playwright install chromium && node server.js
 # Then in Claude Code, follow the loop in ~/.claude/commands/start.md
 
 # Enforcer service (local testing)
-cd enforcer && npm install && ANTHROPIC_API_KEY=... SERVER_URL=... GITHUB_TOKEN=... npm start
+cd enforcer && npm install && DEEPSEEK_API_KEY=... GITHUB_TOKEN=... SERVER_URL=... GITHUB_TOKEN=... npm start
 ```
 Frontend deploy: automatic on push to `main` via GitHub Actions → GitHub Pages.
 Server deploy: Railway project `living-game-server` (service: server).
