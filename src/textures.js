@@ -340,6 +340,167 @@ function makeCampfireTexture(scene, key) {
   return { w: CAMPFIRE_W, h: CAMPFIRE_H };
 }
 
+// --- Water tile ------------------------------------------------------------
+// Blue water tile with subtle ripple highlights. Used to build the river.
+// Clearly distinguishable from grass — cooler hue, no blades.
+const WATER_BASE = 0x2255aa;
+const WATER_DEEP = 0x1a3e80;
+const WATER_LIGHT = 0x4488cc;
+const WATER_HILIGHT = 0x88bbee;
+
+function makeWaterTexture(scene, key, seed) {
+  const g = scene.make.graphics({ x: 0, y: 0, add: false });
+  const rng = makeRng(seed);
+
+  // Deep-water base.
+  g.fillStyle(WATER_BASE, 1);
+  g.fillRect(0, 0, TILE, TILE);
+
+  // Darker depth patches.
+  for (let i = 0; i < 4; i++) {
+    g.fillStyle(WATER_DEEP, 0.35);
+    g.fillEllipse(rng() * TILE, rng() * TILE, 8 + rng() * 14, 6 + rng() * 8);
+  }
+
+  // Ripple highlight streaks (horizontal ellipses).
+  const ripples = 5;
+  for (let i = 0; i < ripples; i++) {
+    const rx = rng() * TILE;
+    const ry = rng() * TILE;
+    const rw = 10 + rng() * 16;
+    const rh = 2 + rng() * 3;
+    g.fillStyle(WATER_LIGHT, 0.4 + rng() * 0.25);
+    g.fillEllipse(rx, ry, rw, rh);
+  }
+
+  // Bright specular highlight dots.
+  for (let i = 0; i < 4; i++) {
+    g.fillStyle(WATER_HILIGHT, 0.55 + rng() * 0.3);
+    g.fillCircle(rng() * TILE, rng() * TILE, 1 + rng() * 1.5);
+  }
+
+  g.generateTexture(key, TILE, TILE);
+  g.destroy();
+}
+
+// --- Cave entrance ---------------------------------------------------------
+// A dark hollow with a rocky stone frame. No collision — purely a visual
+// landmark. Dark interior reads unmistakably as a cave.
+const CAVE_W = 80;
+const CAVE_H = 80;
+
+function makeCaveTexture(scene, key) {
+  const g = scene.make.graphics({ x: 0, y: 0, add: false });
+  const cx = CAVE_W / 2;
+  const cy = CAVE_H / 2 + 4;
+
+  // Ground shadow beneath the whole entrance.
+  g.fillStyle(0x000000, 0.3);
+  g.fillEllipse(cx, cy + 8, 64, 20);
+
+  // Outer rocky frame — irregular ring of grey stone chunks.
+  const frameStones = [
+    { deg: 0,   rx: 26, ry: 18, ew: 16, eh: 12 },
+    { deg: 45,  rx: 24, ry: 16, ew: 13, eh: 10 },
+    { deg: 90,  rx: 28, ry: 18, ew: 14, eh: 12 },
+    { deg: 135, rx: 24, ry: 16, ew: 12, eh: 10 },
+    { deg: 180, rx: 26, ry: 18, ew: 16, eh: 12 },
+    { deg: 225, rx: 24, ry: 16, ew: 14, eh: 10 },
+    { deg: 270, rx: 28, ry: 18, ew: 14, eh: 12 },
+    { deg: 315, rx: 24, ry: 16, ew: 12, eh: 10 },
+  ];
+  for (const s of frameStones) {
+    const rad = (s.deg * Math.PI) / 180;
+    const sx = cx + Math.cos(rad) * s.rx;
+    const sy = cy + Math.sin(rad) * s.ry;
+    g.fillStyle(0x6e6e6e, 1);
+    g.fillEllipse(sx, sy, s.ew, s.eh);
+    g.fillStyle(0x9a9a9a, 1);
+    g.fillEllipse(sx - 2, sy - 2, s.ew * 0.55, s.eh * 0.55);
+    g.fillStyle(0x4a4a4a, 1);
+    g.fillEllipse(sx + 2, sy + 2, s.ew * 0.45, s.eh * 0.45);
+  }
+
+  // Dark interior — the cave void.
+  g.fillStyle(0x0a0a0f, 1);
+  g.fillEllipse(cx, cy, 36, 30);
+
+  // Slightly lighter inner edge (rim of the opening catching light).
+  g.fillStyle(0x2a2030, 0.8);
+  g.fillEllipse(cx, cy, 28, 22);
+
+  // Deepest void.
+  g.fillStyle(0x000000, 1);
+  g.fillEllipse(cx, cy + 2, 20, 16);
+
+  // Small highlight at the top of the frame (sunlit rim stone).
+  g.fillStyle(0xbbbbbb, 0.7);
+  g.fillEllipse(cx, cy - 18, 20, 6);
+
+  g.generateTexture(key, CAVE_W, CAVE_H);
+  g.destroy();
+  return { w: CAVE_W, h: CAVE_H };
+}
+
+// --- Well ------------------------------------------------------------------
+// A stone-ring well with a dark centre opening. No collision — landmark only.
+// Clearly distinguished from the campfire: no flames, cool grey palette.
+const WELL_W = 52;
+const WELL_H = 52;
+
+function makeWellTexture(scene, key) {
+  const g = scene.make.graphics({ x: 0, y: 0, add: false });
+  const cx = WELL_W / 2;
+  const cy = WELL_H / 2 + 2;
+
+  // Ground shadow.
+  g.fillStyle(0x000000, 0.22);
+  g.fillEllipse(cx, cy + 14, 42, 12);
+
+  // Outer stone ring — eight stone blocks around a circle.
+  const wellStones = [0, 45, 90, 135, 180, 225, 270, 315];
+  for (const deg of wellStones) {
+    const rad = (deg * Math.PI) / 180;
+    const sx = cx + Math.cos(rad) * 16;
+    const sy = cy + Math.sin(rad) * 12;
+    g.fillStyle(0x888070, 1);
+    g.fillRoundedRect(sx - 5, sy - 4, 10, 8, 2);
+    g.fillStyle(0xaaa090, 0.8);
+    g.fillRoundedRect(sx - 4, sy - 3, 5, 4, 1);
+    g.fillStyle(0x555048, 0.6);
+    g.fillRoundedRect(sx + 1, sy + 1, 4, 3, 1);
+  }
+
+  // Dark well interior (the water below).
+  g.fillStyle(0x0a0f18, 1);
+  g.fillEllipse(cx, cy, 22, 18);
+  // Faint water glint at the bottom of the well.
+  g.fillStyle(0x1a3e6a, 0.7);
+  g.fillEllipse(cx - 2, cy + 2, 12, 8);
+  g.fillStyle(0x4488aa, 0.4);
+  g.fillEllipse(cx - 3, cy + 1, 5, 3);
+
+  // Wooden crossbeam over the well opening.
+  g.fillStyle(0x7a5530, 1);
+  g.fillRoundedRect(cx - 18, cy - 4, 36, 5, 2);
+  g.fillStyle(0x5a3e22, 0.7);
+  g.fillRoundedRect(cx - 18, cy, 36, 2, 1);
+  g.fillStyle(0x9a7248, 0.8);
+  g.fillRoundedRect(cx - 17, cy - 3, 8, 2, 1);
+
+  // Vertical post on each side of the beam.
+  g.fillStyle(0x7a5530, 1);
+  g.fillRoundedRect(cx - 20, cy - 12, 5, 20, 2);
+  g.fillRoundedRect(cx + 14, cy - 12, 5, 20, 2);
+  g.fillStyle(0x5a3e22, 0.6);
+  g.fillRect(cx - 18, cy - 11, 2, 18);
+  g.fillRect(cx + 16, cy - 11, 2, 18);
+
+  g.generateTexture(key, WELL_W, WELL_H);
+  g.destroy();
+  return { w: WELL_W, h: WELL_H };
+}
+
 // Generate everything; returns metadata the scene needs for sizing/bodies.
 export function generateTextures(scene) {
   const grassVariants = 4;
@@ -351,12 +512,23 @@ export function generateTextures(scene) {
   const player = makePlayerTextures(scene);
   const campfire = makeCampfireTexture(scene, 'campfire');
 
+  // New world landmarks.
+  const waterVariants = 3;
+  for (let i = 0; i < waterVariants; i++) {
+    makeWaterTexture(scene, 'water-' + i, 9999 + i * 1337);
+  }
+  const cave = makeCaveTexture(scene, 'cave');
+  const well = makeWellTexture(scene, 'well');
+
   return {
     tile: TILE,
     grassVariants,
+    waterVariants,
     tree,
     rock,
     player,
     campfire,
+    cave,
+    well,
   };
 }
