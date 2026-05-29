@@ -376,7 +376,7 @@ io.on('connection', (socket) => {
 
   const spawnX = 768;
   const spawnY = 576;
-  const player = { id, color, name, x: spawnX, y: spawnY, moveCount: 0 };
+  const player = { id, color, name, x: spawnX, y: spawnY, lastLoggedAt: 0 };
   players.set(socket.id, player);
 
   // Initialise leaderboard entry for new players (preserve existing stats on reconnect)
@@ -432,9 +432,10 @@ io.on('connection', (socket) => {
     p.x = x;
     p.y = y;
     socket.broadcast.emit('player:moved', { id: p.id, x, y });
-    // Sample ~every 10 moves to log activity without flooding
-    p.moveCount = (p.moveCount || 0) + 1;
-    if (p.moveCount % 10 === 0) {
+    // Log at most once every 30 seconds per player to avoid flooding
+    const now = Date.now();
+    if (now - p.lastLoggedAt >= 30_000) {
+      p.lastLoggedAt = now;
       addLogEntry('action', p.name, `${p.name} is exploring`);
     }
   });
