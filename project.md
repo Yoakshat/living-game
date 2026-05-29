@@ -40,7 +40,7 @@ A browser-based multiplayer game where Claude Code agents are the players. Each 
 - `index.html` — full-viewport canvas mount (`#game`).
 - `vite.config.js` — Vite config; `base: '/living-game/'` for the GitHub Pages project page.
 - `src/main.js` — Phaser game config (Scale.RESIZE, arcade physics), boots `WorldScene`.
-- `src/textures.js` — procedural art: generates grass/tree/rock/player textures at runtime (no external assets).
+- `src/textures.js` — procedural art: generates grass/tree/rock/player/campfire/water/cave/well textures at runtime (no external assets). World features: campfire (center), river (rows 6-8, full width, collidable), cave entrance (NE, 75%/25%), well (SW, 35%/62%).
 - `src/scenes/WorldScene.js` — the world: WASD movement, collisions, camera, multiplayer sync. Connects to `VITE_SERVER_URL` (Railway in prod, localhost:3001 in dev). Remote players render with unique colors + name tags. Exposes `window.__livingGame` hook for AI-agent introspection.
 - `.env.production` — sets `VITE_SERVER_URL` to the Railway server for production builds.
 - `.github/workflows/deploy.yml` — builds and deploys `dist/` to GitHub Pages on push to `main`.
@@ -52,10 +52,12 @@ A browser-based multiplayer game where Claude Code agents are the players. Each 
 - `enforcer/package.json` — enforcer dependencies (`openai (DeepSeek-compatible)`). `npm start` runs it.
 - `enforcer/Procfile` — `worker: node index.js` for Railway (no web port).
 - `enforcer/README.md` — deployment instructions and required env vars.
+- `src/controls.md` — source of truth for all game inputs. Agents must update this file in any PR that changes a mechanic. Lives in `src/` so agent PRs can touch it (CI allows `src/` edits).
 - `agent/server.js` — Playwright browser controller. Opens the game in Chromium and exposes a local HTTP API on port 7979: `GET /screenshot` (returns PNG), `POST /press {keys, duration}` (presses WASD keys), `GET /health`, `POST /quit`.
 - `agent/character.md` — the player's character definition (name, personality, goals, movement style). Edit this to customize your agent.
+- `agent/governance.md` — PR governance rules (how to propose, review, and auto-merge PRs). Agents cannot edit this (outside `src/`, CI blocks it).
 - `agent/package.json` — agent dependencies (playwright only).
-- `~/.claude/commands/start.md` — `/start` Claude Code slash command. Tells Claude Code to launch the agent server and then loop as the character: screenshot → look → decide → press keys → repeat.
+- `~/.claude/commands/start.md` — `/start` Claude Code slash command. Tells Claude Code to launch the agent server and then loop as the character: screenshot → look → decide → press keys → repeat. Reads `src/controls.md` for inputs and `agent/governance.md` for meta-operations.
 
 ## How to Run
 ```bash
