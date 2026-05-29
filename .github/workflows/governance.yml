@@ -40,6 +40,9 @@ jobs:
 
           SERVER_URL="https://living-game-server-production.up.railway.app"
 
+          # Enforcer timeout in seconds (30 minutes = 1800)
+          ENFORCER_TIMEOUT_SECONDS=1800
+
           echo "$TALLY" | jq -c '.prs[]' | while read -r PR; do
             NUMBER=$(echo "$PR" | jq '.number')
             OPENED_AT=$(echo "$PR" | jq -r '.openedAt')
@@ -50,17 +53,50 @@ jobs:
               continue
             fi
 
+            # --- Enforcer state check (before sync) ---
+            ENFORCER_STATE=$(echo "$PR" | jq -r '.enforcerState // "null"')
+
+            # Handle enforcer:block — close the PR
+            if [ "$ENFORCER_STATE" = "enforcer:block" ]; then
+              ENFORCER_COMMENT=$(echo "$PR" | jq -r '.enforcerComment // "The enforcer determined the diff contained more than mechanical conflict resolution."')
+              echo "PR #$NUMBER: enforcer blocked — closing"
+              gh pr close "$NUMBER" --repo Yoakshat/living-game \
+                --comment "**Enforcer verdict: blocked.** $ENFORCER_COMMENT" || true
+              continue
+            fi
+
+            # Handle needs-enforcer-review — check for timeout, then skip
+            if [ "$ENFORCER_STATE" = "needs-enforcer-review" ]; then
+              PENDING_SINCE=$(echo "$PR" | jq -r '.enforcerPendingSince // ""')
+              if [ -n "$PENDING_SINCE" ]; then
+                PENDING_EPOCH=$(date -d "$PENDING_SINCE" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%S" "${PENDING_SINCE%%.*}" +%s 2>/dev/null || echo 0)
+                NOW_EPOCH=$(date +%s)
+                PENDING_SECONDS=$(( NOW_EPOCH - PENDING_EPOCH ))
+                if [ "$PENDING_SECONDS" -ge "$ENFORCER_TIMEOUT_SECONDS" ]; then
+                  echo "PR #$NUMBER: enforcer review timed out after ${PENDING_SECONDS}s — closing for safety"
+                  gh pr close "$NUMBER" --repo Yoakshat/living-game \
+                    --comment "**Enforcer unavailable.** PR closed for safety after waiting $(( PENDING_SECONDS / 60 )) minutes for an enforcer verdict. Re-open and re-vote when the enforcer service is back online." || true
+                  continue
+                fi
+              fi
+              echo "PR #$NUMBER: enforcer review pending — waiting (${PENDING_SECONDS:-?}s elapsed)"
+              continue
+            fi
+
             # --- Stale branch detection ---
             # Sync the current head SHA with the server. If it changed, the server
-            # wipes all votes for this PR and re-notifies agents to vote again.
+            # either wipes all votes (pre-threshold) or transitions to enforcer review.
             CURRENT_SHA=$(gh pr view "$NUMBER" --repo Yoakshat/living-game --json headRefOid -q '.headRefOid' 2>/dev/null || echo '')
             if [ -n "$CURRENT_SHA" ]; then
               SYNC_RESULT=$(curl -sf -X POST "$SERVER_URL/sync-pr" \
                 -H 'Content-Type: application/json' \
                 -d "{\"prNumber\": $NUMBER, \"sha\": \"$CURRENT_SHA\"}" || echo '{}')
-              WIPED=$(echo "$SYNC_RESULT" | jq -r '.wiped // false')
-              if [ "$WIPED" = "true" ]; then
+              SYNC_STATUS=$(echo "$SYNC_RESULT" | jq -r '.status // "unknown"')
+              if [ "$SYNC_STATUS" = "wiped" ]; then
                 echo "PR #$NUMBER: SHA changed to ${CURRENT_SHA:0:7} — votes wiped, agents re-notified"
+              elif [ "$SYNC_STATUS" = "enforcer-pending" ]; then
+                echo "PR #$NUMBER: SHA changed but votes were at threshold — transitioning to enforcer review"
+                continue
               fi
             fi
 
@@ -75,6 +111,14 @@ jobs:
               echo "PR #$NUMBER: not found in fresh tally — skipping"
               continue
             fi
+
+            # Re-check enforcer state after sync (sync may have triggered enforcer review)
+            FRESH_ENFORCER_STATE=$(echo "$FRESH_PR" | jq -r '.enforcerState // "null"')
+            if [ "$FRESH_ENFORCER_STATE" = "needs-enforcer-review" ]; then
+              echo "PR #$NUMBER: enforcer review just triggered — waiting"
+              continue
+            fi
+
             YES=$(echo "$FRESH_PR" | jq '.yesVotes')
             NO=$(echo "$FRESH_PR" | jq '.noVotes')
             TOTAL=$(echo "$FRESH_PR" | jq '.totalVotes')
@@ -121,7 +165,15 @@ jobs:
               continue
             fi
 
-            echo "PR #$NUMBER: yes=$YES no=$NO total=$TOTAL (quorum=$QUORUM)"
+            echo "PR #$NUMBER: yes=$YES no=$NO total=$TOTAL (quorum=$QUORUM) enforcer=$FRESH_ENFORCER_STATE"
+
+            # Handle enforcer:approve — treat as normally approved, proceed to merge check
+            if [ "$FRESH_ENFORCER_STATE" = "enforcer:approve" ]; then
+              echo "PR #$NUMBER: enforcer approved — proceeding to merge"
+              gh pr merge "$NUMBER" --repo Yoakshat/living-game --squash \
+                --subject "$(gh pr view "$NUMBER" --repo Yoakshat/living-game --json title -q '.title') (#$NUMBER)" || true
+              continue
+            fi
 
             if [ "$TOTAL" -ge "$QUORUM" ]; then
               # 2/3 approval: yes * 3 >= total * 2
