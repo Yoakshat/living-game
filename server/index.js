@@ -45,13 +45,13 @@ function addLogEntry(type, player, message) {
 }
 
 // --- Server state -----------------------------------------------------------
-// players: Map<socketId, { id, color, name, x, y, moveCount }>
+// players: Map<socketId, { id, color, name, githubUser, x, y, moveCount }>
 const players = new Map();
 const usedColors = new Set();
 
 // --- Leaderboard stats -------------------------------------------------------
-// playerStats: Map<playerName, { name, color, prsmerged, worldChanges }>
-// Keyed by name (stable identifier across reconnects).
+// playerStats: Map<githubUser|playerName, { displayName, githubUser, color, prsmerged, worldChanges }>
+// Keyed by githubUser when available, otherwise by playerName.
 const playerStats = new Map();
 
 function assignColor() {
@@ -65,7 +65,8 @@ function assignColor() {
 // --- PR governance state ----------------------------------------------------
 // prs: Map<prNumber, {
 //   number, title, url, openedAt, sha, currentSha, ciPassed,
-//   votes: Map<agentId, 'yes'|'no'>,
+//   authorGithubUser,     // GitHub login of the PR author (used to block self-votes)
+//   votes: Map<voteKey, 'yes'|'no'>,  // voteKey = githubUser || socketId
 //   approvedSha,          // SHA when votes first crossed threshold (null until then)
 //   enforcerState,        // null | 'needs-enforcer-review' | 'enforcer:approve' | 'enforcer:block'
 //   enforcerComment,      // explanation from enforcer (for governance to relay on block)
@@ -143,6 +144,8 @@ async function pollGitHub() {
   // Detect new PRs; track them but only notify agents once CI passes
   for (const pr of openPRs) {
     if (!prs.has(pr.number)) {
+      // Extract author GitHub username from the PR payload
+      const authorGithubUser = pr.user && pr.user.login ? pr.user.login : null;
       prs.set(pr.number, {
         number: pr.number,
         title: pr.title,
@@ -151,6 +154,7 @@ async function pollGitHub() {
         sha: pr.head.sha,
         currentSha: pr.head.sha,
         ciPassed: false,
+        authorGithubUser,
         votes: new Map(),
         approvedSha: null,
         enforcerState: null,
@@ -158,7 +162,7 @@ async function pollGitHub() {
         enforcerPendingSince: null,
         newSha: null,
       });
-      console.log(`[PR] Tracking #${pr.number}: ${pr.title} (waiting for CI)`);
+      console.log(`[PR] Tracking #${pr.number}: ${pr.title} (author: ${authorGithubUser || 'unknown'}, waiting for CI)`);
     }
   }
 
@@ -169,7 +173,10 @@ async function pollGitHub() {
     if (ci === 'passed') {
       pr.ciPassed = true;
       console.log(`[PR] #${pr.number} CI passed — notifying agents`);
-      for (const [socketId] of players) {
+      for (const [socketId, playerData] of players) {
+        // Skip players whose identity (githubUser or socket id) has already voted
+        const voteKey = playerData.githubUser || playerData.id;
+        if (pr.votes.has(voteKey)) continue;
         io.to(socketId).emit('pr:review_needed', [
           { number: pr.number, title: pr.title, url: pr.url },
         ]);
@@ -229,9 +236,30 @@ app.use((req, res, next) => {
 app.get('/', (_req, res) => res.json({ status: 'ok' }));
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
-// Leaderboard — returns all known players ranked by PRs merged + world changes
+// Leaderboard — returns players aggregated by GitHub profile, ranked by PRs merged + world changes
 app.get('/leaderboard', (_req, res) => {
-  const stats = [...playerStats.values()].sort((a, b) => {
+  // Aggregate playerStats by githubUser (when present) to collapse multiple agents
+  // into a single entry. Players without a githubUser keep individual entries.
+  const aggregated = new Map(); // key: githubUser || 'name:<name>'
+
+  for (const entry of playerStats.values()) {
+    const key = entry.githubUser ? entry.githubUser : `name:${entry.displayName}`;
+    if (!aggregated.has(key)) {
+      aggregated.set(key, {
+        displayName: entry.githubUser || entry.displayName,
+        githubUser: entry.githubUser || null,
+        color: entry.color,
+        prsmerged: entry.prsmerged || 0,
+        worldChanges: entry.worldChanges || 0,
+      });
+    } else {
+      const agg = aggregated.get(key);
+      agg.prsmerged = (agg.prsmerged || 0) + (entry.prsmerged || 0);
+      agg.worldChanges = (agg.worldChanges || 0) + (entry.worldChanges || 0);
+    }
+  }
+
+  const stats = [...aggregated.values()].sort((a, b) => {
     const score = (p) => (p.prsmerged || 0) * 3 + (p.worldChanges || 0);
     return score(b) - score(a);
   });
@@ -393,12 +421,14 @@ io.on('connection', (socket) => {
 
   const spawnX = 768;
   const spawnY = 576;
-  const player = { id, color, name, x: spawnX, y: spawnY, lastLoggedAt: 0 };
+  // githubUser is null until player:identify arrives
+  const player = { id, color, name, githubUser: null, x: spawnX, y: spawnY, lastLoggedAt: 0 };
   players.set(socket.id, player);
 
   // Initialise leaderboard entry for new players (preserve existing stats on reconnect)
+  // Initially keyed by name; will be re-keyed to githubUser once player:identify arrives.
   if (!playerStats.has(name)) {
-    playerStats.set(name, { name, color, prsmerged: 0, worldChanges: 0 });
+    playerStats.set(name, { displayName: name, githubUser: null, color, prsmerged: 0, worldChanges: 0 });
   } else {
     // Update color in case it changed
     playerStats.get(name).color = color;
@@ -420,24 +450,65 @@ io.on('connection', (socket) => {
   // Announce newcomer to others
   socket.broadcast.emit('player:join', { id, color, name, x: spawnX, y: spawnY });
 
-  // Send CI-passed PRs this agent hasn't voted on yet
-  const unvoted = [...prs.values()]
-    .filter((pr) => pr.ciPassed && !pr.votes.has(id))
-    .map((pr) => ({ number: pr.number, title: pr.title, url: pr.url }));
-  if (unvoted.length > 0) {
-    socket.emit('pr:review_needed', unvoted);
-  }
-
   socket.on('player:identify', (data) => {
     const p = players.get(socket.id);
     if (!p) return;
+
+    // Store GitHub username if provided
+    const githubUser = typeof data.githubUser === 'string' ? data.githubUser.trim() : '';
+    if (githubUser && !p.githubUser) {
+      const oldStatsKey = p.name; // currently keyed by name
+      p.githubUser = githubUser;
+
+      // Migrate or merge leaderboard stats to be keyed by githubUser
+      const existingGhStats = playerStats.get(githubUser);
+      const nameStats = playerStats.get(oldStatsKey);
+
+      if (existingGhStats) {
+        // A stats entry already exists for this GitHub user (from a previous session or another agent).
+        // Merge the name-keyed stats into the github-keyed stats and remove the name entry.
+        if (nameStats && oldStatsKey !== githubUser) {
+          existingGhStats.prsmerged = (existingGhStats.prsmerged || 0) + (nameStats.prsmerged || 0);
+          existingGhStats.worldChanges = (existingGhStats.worldChanges || 0) + (nameStats.worldChanges || 0);
+          playerStats.delete(oldStatsKey);
+        }
+        existingGhStats.color = p.color;
+        existingGhStats.displayName = githubUser;
+        existingGhStats.githubUser = githubUser;
+      } else if (nameStats) {
+        // Promote existing name-keyed entry to github-keyed
+        nameStats.githubUser = githubUser;
+        nameStats.displayName = githubUser;
+        playerStats.delete(oldStatsKey);
+        playerStats.set(githubUser, nameStats);
+      } else {
+        // No existing entry — create fresh
+        playerStats.set(githubUser, { displayName: githubUser, githubUser, color: p.color, prsmerged: 0, worldChanges: 0 });
+      }
+
+      console.log(`[~] ${p.name} identified as GitHub user: ${githubUser}`);
+    }
+
+    // Apply requested display name
     const requestedName = typeof data.name === 'string' ? data.name.trim() : '';
-    if (!requestedName) return;
-    const takenByOther = [...players.values()].some((q) => q !== p && q.name === requestedName);
-    if (!takenByOther) {
-      console.log(`[~] ${p.name} → ${requestedName}`);
-      p.name = requestedName;
-      io.emit('player:renamed', { id: p.id, name: p.name });
+    if (requestedName) {
+      const takenByOther = [...players.values()].some((q) => q !== p && q.name === requestedName);
+      if (!takenByOther) {
+        console.log(`[~] ${p.name} → ${requestedName}`);
+        p.name = requestedName;
+        io.emit('player:renamed', { id: p.id, name: p.name });
+      }
+    }
+
+    // Send CI-passed PRs this identity hasn't voted on yet.
+    // Use githubUser as the vote key if available, so a second agent from the same
+    // user won't re-receive PRs already voted on by the first agent.
+    const effectiveVoteKey = p.githubUser || p.id;
+    const unvoted = [...prs.values()]
+      .filter((pr) => pr.ciPassed && !pr.votes.has(effectiveVoteKey))
+      .map((pr) => ({ number: pr.number, title: pr.title, url: pr.url }));
+    if (unvoted.length > 0) {
+      socket.emit('pr:review_needed', unvoted);
     }
   });
 
@@ -467,10 +538,27 @@ io.on('connection', (socket) => {
     if (!pr) return;
     // Don't allow voting on PRs in enforcer review or already decided
     if (pr.enforcerState) return;
-    pr.votes.set(p.id, vote);
+
+    // Block self-voting: reject if voter is the PR author
+    if (p.githubUser && pr.authorGithubUser && p.githubUser === pr.authorGithubUser) {
+      console.log(`[vote] ${p.name} (${p.githubUser}) tried to self-vote on PR #${prNumber} — rejected`);
+      return;
+    }
+
+    // Key votes by githubUser when available, so multiple agents from the same
+    // user only count once. Fall back to socket id for anonymous players.
+    const voteKey = p.githubUser || p.id;
+
+    // If this identity already voted, ignore the new vote (first vote wins)
+    if (pr.votes.has(voteKey)) {
+      console.log(`[vote] ${p.name} (key: ${voteKey}) already voted on PR #${prNumber} — ignored`);
+      return;
+    }
+
+    pr.votes.set(voteKey, vote);
     let yes = 0, no = 0;
     for (const v of pr.votes.values()) { if (v === 'yes') yes++; else no++; }
-    console.log(`[vote] ${p.name} voted ${vote} on PR #${prNumber} — ${yes}y/${no}n`);
+    console.log(`[vote] ${p.name} (key: ${voteKey}) voted ${vote} on PR #${prNumber} — ${yes}y/${no}n`);
 
     // Check if votes just crossed the approval threshold
     if (!pr.approvedSha && isAtThreshold(pr)) {
