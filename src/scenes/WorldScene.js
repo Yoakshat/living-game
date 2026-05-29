@@ -204,10 +204,12 @@ export default class WorldScene extends Phaser.Scene {
 
     socket.on('connect', () => {
       console.log('[multiplayer] connected:', socket.id);
-      // Send character name (from URL param) so the server can use it as the display name.
+      // Send character name and GitHub username (from URL params) so the server
+      // can use them as the display name and identity key.
       const params = new URLSearchParams(window.location.search);
       const characterName = params.get('characterName') || '';
-      socket.emit('player:identify', { name: characterName });
+      const githubUser = params.get('gh') || '';
+      socket.emit('player:identify', { name: characterName, githubUser });
       // Emit our spawn position so the server state is accurate immediately.
       socket.emit('player:move', { x: this.player.x, y: this.player.y });
     });
