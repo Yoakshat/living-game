@@ -10,25 +10,25 @@
  *     d. Posts a GitHub comment on the PR explaining the decision
  *
  * Required env vars:
- *   ANTHROPIC_API_KEY  — Anthropic API key for Claude calls
+ *   DEEPSEEK_API_KEY   — DeepSeek API key for diff analysis
  *   SERVER_URL         — Game server URL (e.g. https://living-game-server-production.up.railway.app)
  *   GITHUB_TOKEN       — GitHub token for reading diffs and posting comments
  */
 
-import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 const SERVER_URL = (process.env.SERVER_URL || '').replace(/\/$/, '');
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const GITHUB_REPO = 'Yoakshat/living-game';
 
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || '60000', 10);
-const CLAUDE_TIMEOUT_MS = 30_000;
-const CLAUDE_MAX_RETRIES = 2;
+const MODEL_TIMEOUT_MS = 30_000;
+const MODEL_MAX_RETRIES = 2;
 
 // Validate required env vars at startup
-if (!ANTHROPIC_API_KEY) {
-  console.error('[enforcer] FATAL: ANTHROPIC_API_KEY is not set. Set this env var in Railway before deploying.');
+if (!DEEPSEEK_API_KEY) {
+  console.error('[enforcer] FATAL: DEEPSEEK_API_KEY is not set. Set this env var in Railway before deploying.');
   process.exit(1);
 }
 if (!SERVER_URL) {
@@ -40,7 +40,10 @@ if (!GITHUB_TOKEN) {
   process.exit(1);
 }
 
-const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
+const deepseek = new OpenAI({
+  apiKey: DEEPSEEK_API_KEY,
+  baseURL: 'https://api.deepseek.com',
+});
 
 // Track PRs currently being analyzed to avoid duplicate concurrent analysis
 const inFlight = new Set();
@@ -156,36 +159,36 @@ ${diff.slice(0, 50_000)}
 Remember: approve only if every single change in the diff is a mechanical conflict resolution artifact. Block on any doubt.`;
 }
 
-async function callClaudeWithTimeout(prompt) {
+async function callModelWithTimeout(prompt) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), CLAUDE_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), MODEL_TIMEOUT_MS);
   try {
-    const response = await anthropic.messages.create(
+    const response = await deepseek.chat.completions.create(
       {
-        model: 'claude-sonnet-4-6',
+        model: 'deepseek-chat',
         max_tokens: 256,
-        system: CLAUDE_SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: prompt }],
+        messages: [
+          { role: 'system', content: CLAUDE_SYSTEM_PROMPT },
+          { role: 'user', content: prompt },
+        ],
       },
       { signal: controller.signal }
     );
-    return response.content[0]?.text || '';
+    return response.choices[0]?.message?.content || '';
   } finally {
     clearTimeout(timer);
   }
 }
 
-async function callClaude(prompt) {
+async function callModel(prompt) {
   let lastError;
-  for (let attempt = 0; attempt <= CLAUDE_MAX_RETRIES; attempt++) {
+  for (let attempt = 0; attempt <= MODEL_MAX_RETRIES; attempt++) {
     try {
-      if (attempt > 0) {
-        console.log(`[claude] Retry attempt ${attempt}`);
-      }
-      return await callClaudeWithTimeout(prompt);
+      if (attempt > 0) console.log(`[enforcer] Retry attempt ${attempt}`);
+      return await callModelWithTimeout(prompt);
     } catch (err) {
       lastError = err;
-      console.error(`[claude] Attempt ${attempt + 1} failed: ${err.message}`);
+      console.error(`[enforcer] Model attempt ${attempt + 1} failed: ${err.message}`);
     }
   }
   throw lastError;
@@ -244,21 +247,21 @@ async function analyzePR(pr) {
 
     // 2. Build prompt and call Claude
     const prompt = buildPrompt(pr, diff);
-    console.log(`[enforcer] PR #${pr.number} calling Claude`);
+    console.log(`[enforcer] PR #${pr.number} calling DeepSeek`);
 
-    let claudeText;
+    let modelText;
     try {
-      claudeText = await callClaude(prompt);
+      modelText = await callModel(prompt);
     } catch (err) {
-      console.error(`[enforcer] PR #${pr.number} Claude call failed after retries: ${err.message}`);
+      console.error(`[enforcer] PR #${pr.number} model call failed after retries: ${err.message}`);
       verdict = 'block';
       reason = 'Analysis timed out — closing for safety.';
-      claudeText = null;
+      modelText = null;
     }
 
-    if (claudeText) {
-      console.log(`[enforcer] PR #${pr.number} Claude response: ${claudeText.slice(0, 200)}`);
-      const parsed = parseVerdict(claudeText);
+    if (modelText) {
+      console.log(`[enforcer] PR #${pr.number} DeepSeek response: ${modelText.slice(0, 200)}`);
+      const parsed = parseVerdict(modelText);
       verdict = parsed.verdict;
       reason = parsed.reason;
     }

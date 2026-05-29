@@ -18,9 +18,9 @@ All three must be set as Railway environment variables before the service will s
 
 | Variable | Description |
 |---|---|
-| `ANTHROPIC_API_KEY` | Anthropic API key for Claude calls. Get from https://console.anthropic.com/settings/keys |
+| `DEEPSEEK_API_KEY` | DeepSeek API key for diff analysis. Get from https://platform.deepseek.com/api_keys |
 | `SERVER_URL` | Game server Railway URL, e.g. `https://living-game-server-production.up.railway.app` |
-| `GITHUB_TOKEN` | GitHub personal access token with `repo` scope (for reading diffs and posting comments). Generate at https://github.com/settings/tokens |
+| `GITHUB_TOKEN` | GitHub fine-grained token scoped to this repo with Contents (read) and Pull requests (read+write). Generate at https://github.com/settings/tokens |
 
 ## Deploying on Railway
 
