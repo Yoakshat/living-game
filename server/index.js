@@ -47,10 +47,32 @@ function assignColor() {
 }
 
 // --- PR governance state ----------------------------------------------------
-// prs: Map<prNumber, { number, title, url, openedAt, sha, currentSha, ciPassed, votes: Map<agentId, 'yes'|'no'> }>
-// sha        = SHA at the time we first tracked the PR
-// currentSha = latest SHA reported by the governance workflow via /sync-pr
+// prs: Map<prNumber, {
+//   number, title, url, openedAt, sha, currentSha, ciPassed,
+//   votes: Map<agentId, 'yes'|'no'>,
+//   approvedSha,          // SHA when votes first crossed threshold (null until then)
+//   enforcerState,        // null | 'needs-enforcer-review' | 'enforcer:approve' | 'enforcer:block'
+//   enforcerComment,      // explanation from enforcer (for governance to relay on block)
+//   enforcerPendingSince, // Date when enforcerState was set to 'needs-enforcer-review'
+//   newSha,               // incoming SHA that triggered enforcer review
+// }>
 const prs = new Map();
+
+// Compute quorum based on current active agents
+function getQuorum() {
+  return Math.max(Math.ceil(players.size * 0.05), 1);
+}
+
+// Check if votes on a PR have crossed the approval threshold
+function isAtThreshold(pr) {
+  let yes = 0, total = 0;
+  for (const v of pr.votes.values()) {
+    total++;
+    if (v === 'yes') yes++;
+  }
+  const quorum = getQuorum();
+  return total >= quorum && (yes * 3) >= (total * 2);
+}
 
 async function githubFetch(url) {
   const headers = { 'User-Agent': 'living-game-server' };
@@ -114,6 +136,11 @@ async function pollGitHub() {
         currentSha: pr.head.sha,
         ciPassed: false,
         votes: new Map(),
+        approvedSha: null,
+        enforcerState: null,
+        enforcerComment: null,
+        enforcerPendingSince: null,
+        newSha: null,
       });
       console.log(`[PR] Tracking #${pr.number}: ${pr.title} (waiting for CI)`);
     }
@@ -178,7 +205,7 @@ app.get('/vote-tally', (_req, res) => {
       if (vote === 'yes') yes++;
       else no++;
     }
-    return {
+    const entry = {
       number: pr.number,
       title: pr.title,
       url: pr.url,
@@ -187,13 +214,21 @@ app.get('/vote-tally', (_req, res) => {
       yesVotes: yes,
       noVotes: no,
       totalVotes: yes + no,
+      approvedSha: pr.approvedSha,
+      enforcerState: pr.enforcerState,
+      enforcerComment: pr.enforcerComment,
+      enforcerPendingSince: pr.enforcerPendingSince,
+      newSha: pr.newSha,
     };
+    return entry;
   });
   res.json({ activeAgents, prs: tally });
 });
 
 // Called by governance workflow at the start of each poll cycle per PR.
-// If sha differs from currentSha, wipes all votes and re-notifies agents.
+// If sha differs from currentSha:
+//   - If votes were at threshold → transition to 'needs-enforcer-review' (keep votes)
+//   - If votes were NOT at threshold → wipe votes (existing behavior)
 app.post('/sync-pr', (req, res) => {
   const { prNumber, sha } = req.body || {};
   if (typeof prNumber !== 'number' || typeof sha !== 'string') {
@@ -206,14 +241,89 @@ app.post('/sync-pr', (req, res) => {
   if (sha === pr.currentSha) {
     return res.json({ status: 'unchanged', wiped: false });
   }
-  // SHA changed — wipe votes and notify agents to re-vote
-  pr.votes.clear();
-  pr.currentSha = sha;
-  // If CI had already passed for the old SHA, re-gate until we confirm CI on new SHA
-  pr.ciPassed = false;
-  console.log(`[sync-pr] #${prNumber} SHA changed to ${sha.slice(0, 7)} — votes wiped, re-gating CI`);
-  io.emit('pr:revote', { prNumber, sha });
-  return res.json({ status: 'wiped', wiped: true });
+
+  // SHA changed — check if votes were already at threshold
+  const atThreshold = pr.approvedSha !== null || isAtThreshold(pr);
+
+  if (atThreshold) {
+    // Votes had crossed threshold: transition to enforcer review
+    pr.enforcerState = 'needs-enforcer-review';
+    pr.enforcerPendingSince = new Date();
+    pr.newSha = sha;
+    // Keep currentSha as approvedSha for diff comparison; don't update it yet
+    // approvedSha is already set (or set it now if threshold was just crossed inline)
+    if (!pr.approvedSha) {
+      pr.approvedSha = pr.currentSha;
+    }
+    console.log(`[sync-pr] #${prNumber} SHA changed to ${sha.slice(0, 7)} — votes at threshold, transitioning to enforcer review (approvedSha=${pr.approvedSha.slice(0, 7)})`);
+    return res.json({ status: 'enforcer-pending', wiped: false });
+  } else {
+    // Votes had NOT crossed threshold: wipe votes (existing behavior)
+    pr.votes.clear();
+    pr.currentSha = sha;
+    pr.approvedSha = null;
+    pr.enforcerState = null;
+    pr.enforcerComment = null;
+    pr.enforcerPendingSince = null;
+    pr.newSha = null;
+    pr.ciPassed = false;
+    console.log(`[sync-pr] #${prNumber} SHA changed to ${sha.slice(0, 7)} — votes wiped, re-gating CI`);
+    io.emit('pr:revote', { prNumber, sha });
+    return res.json({ status: 'wiped', wiped: true });
+  }
+});
+
+// Enforcer service posts verdict here
+// Body: { prNumber, verdict: 'approve' | 'block', reason, sha }
+// 'sha' is the currentSha the enforcer analyzed — rejected if it no longer matches (stale verdict)
+app.post('/enforcer-verdict', (req, res) => {
+  const { prNumber, verdict, reason, sha } = req.body || {};
+  if (
+    typeof prNumber !== 'number' ||
+    (verdict !== 'approve' && verdict !== 'block') ||
+    typeof reason !== 'string'
+  ) {
+    return res.status(400).json({ error: 'prNumber (number), verdict (approve|block), reason (string) required' });
+  }
+
+  const pr = prs.get(prNumber);
+  if (!pr) {
+    return res.status(404).json({ error: 'PR not found' });
+  }
+  if (pr.enforcerState !== 'needs-enforcer-review') {
+    return res.json({ status: 'ignored', reason: 'PR not in enforcer-pending state' });
+  }
+
+  // Reject stale verdicts: if enforcer analyzed an old newSha
+  if (sha && pr.newSha && sha !== pr.newSha) {
+    console.log(`[enforcer-verdict] #${prNumber} stale verdict for sha ${sha.slice(0, 7)} (current newSha=${pr.newSha.slice(0, 7)}) — ignoring`);
+    return res.json({ status: 'stale', reason: 'SHA mismatch — verdict ignored' });
+  }
+
+  if (verdict === 'approve') {
+    // Clear enforcer pending, update currentSha to the new one, keep votes intact
+    pr.enforcerState = 'enforcer:approve';
+    pr.enforcerComment = reason;
+    pr.currentSha = pr.newSha;
+    pr.approvedSha = pr.newSha; // treat the new SHA as approved
+    pr.enforcerPendingSince = null;
+    pr.newSha = null;
+    pr.ciPassed = false; // re-gate CI on the new SHA
+    console.log(`[enforcer-verdict] #${prNumber} APPROVED: ${reason}`);
+    return res.json({ status: 'approved' });
+  } else {
+    // Block: clear enforcer pending, wipe votes, update currentSha
+    pr.enforcerState = 'enforcer:block';
+    pr.enforcerComment = reason;
+    pr.currentSha = pr.newSha;
+    pr.approvedSha = null;
+    pr.votes.clear();
+    pr.enforcerPendingSince = null;
+    pr.newSha = null;
+    pr.ciPassed = false;
+    console.log(`[enforcer-verdict] #${prNumber} BLOCKED: ${reason}`);
+    return res.json({ status: 'blocked' });
+  }
 });
 
 // --- Socket.io events -------------------------------------------------------
@@ -282,10 +392,18 @@ io.on('connection', (socket) => {
     if (typeof prNumber !== 'number' || (vote !== 'yes' && vote !== 'no')) return;
     const pr = prs.get(prNumber);
     if (!pr) return;
+    // Don't allow voting on PRs in enforcer review or already decided
+    if (pr.enforcerState && pr.enforcerState !== null) return;
     pr.votes.set(p.id, vote);
     let yes = 0, no = 0;
     for (const v of pr.votes.values()) { if (v === 'yes') yes++; else no++; }
     console.log(`[vote] ${p.name} voted ${vote} on PR #${prNumber} — ${yes}y/${no}n`);
+
+    // Check if votes just crossed the approval threshold
+    if (!pr.approvedSha && isAtThreshold(pr)) {
+      pr.approvedSha = pr.currentSha;
+      console.log(`[vote] PR #${prNumber} crossed approval threshold — approvedSha set to ${pr.approvedSha.slice(0, 7)}`);
+    }
   });
 
   socket.on('disconnect', () => {

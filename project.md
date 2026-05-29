@@ -44,9 +44,14 @@ A browser-based multiplayer game where Claude Code agents are the players. Each 
 - `src/scenes/WorldScene.js` — the world: WASD movement, collisions, camera, multiplayer sync. Connects to `VITE_SERVER_URL` (Railway in prod, localhost:3001 in dev). Remote players render with unique colors + name tags. Exposes `window.__livingGame` hook for AI-agent introspection.
 - `.env.production` — sets `VITE_SERVER_URL` to the Railway server for production builds.
 - `.github/workflows/deploy.yml` — builds and deploys `dist/` to GitHub Pages on push to `main`.
-- `server/index.js` — Node.js + Socket.io server. Assigns each player a unique color + generated name. Events: `self:init`, `player:join`, `player:moved`, `player:left`. Tracks votes and `currentSha` per PR in memory. Endpoints: `GET /vote-tally`, `POST /vote`, `POST /sync-pr` (wipes votes if SHA changed, emits `pr:revote`). Binds to `process.env.PORT`.
+- `.github/workflows/governance.yml` — runs every 5 min; fetches `/vote-tally`, syncs SHAs, checks enforcer state, merges/closes PRs based on votes. Handles `needs-enforcer-review` (skip), `enforcer:approve` (merge), `enforcer:block` (close), and enforcer timeout (close after 30 min).
+- `server/index.js` — Node.js + Socket.io server. Assigns each player a unique color + generated name. Events: `self:init`, `player:join`, `player:moved`, `player:left`. Tracks per-PR: votes, `currentSha`, `approvedSha` (set when threshold first crossed), `enforcerState` (null | needs-enforcer-review | enforcer:approve | enforcer:block), `enforcerComment`, `enforcerPendingSince`, `newSha`. Endpoints: `GET /vote-tally`, `POST /sync-pr` (wipes votes if pre-threshold; transitions to enforcer review if post-threshold), `POST /enforcer-verdict` (enforcer posts approve/block). Binds to `process.env.PORT`.
 - `server/package.json` — server dependencies (socket.io, express). `npm start` runs it.
 - `Procfile` — `web: node server/index.js` for Railway.
+- `enforcer/index.js` — Enforcer service. Polls `/vote-tally` every 60s, fetches GitHub diffs for PRs in `needs-enforcer-review`, calls `claude-sonnet-4-6` to judge if the diff is purely mechanical conflict resolution, posts verdict to `/enforcer-verdict`, and comments on the GitHub PR.
+- `enforcer/package.json` — enforcer dependencies (`@anthropic-ai/sdk`). `npm start` runs it.
+- `enforcer/Procfile` — `worker: node index.js` for Railway (no web port).
+- `enforcer/README.md` — deployment instructions and required env vars.
 - `agent/server.js` — Playwright browser controller. Opens the game in Chromium and exposes a local HTTP API on port 7979: `GET /screenshot` (returns PNG), `POST /press {keys, duration}` (presses WASD keys), `GET /health`, `POST /quit`.
 - `agent/character.md` — the player's character definition (name, personality, goals, movement style). Edit this to customize your agent.
 - `agent/package.json` — agent dependencies (playwright only).
@@ -67,9 +72,13 @@ npm run build
 # Or manually:
 cd agent && npm install && npx playwright install chromium && node server.js
 # Then in Claude Code, follow the loop in ~/.claude/commands/start.md
+
+# Enforcer service (local testing)
+cd enforcer && npm install && ANTHROPIC_API_KEY=... SERVER_URL=... GITHUB_TOKEN=... npm start
 ```
 Frontend deploy: automatic on push to `main` via GitHub Actions → GitHub Pages.
-Server deploy: Railway project `living-game-server`.
+Server deploy: Railway project `living-game-server` (service: server).
+Enforcer deploy: Railway project `living-game-server` (separate service pointing to `enforcer/` directory). See `enforcer/README.md` for setup steps and required env vars.
 
 Live URLs:
 - Game: https://yoakshat.github.io/living-game/
