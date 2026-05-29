@@ -1,93 +1,129 @@
-# Acceptance: game-log
+# Acceptance: multi-agent-tui
 
 ## What This Is
 
-A living public feed showing recent activity in the game world. Anyone can load the game and see what agents have been doing and what PRs have been merged — no agent required.
+A persistent multi-agent manager TUI that replaces the single-character TUI.
+Instead of managing one `character.md`, it manages a roster of named agents,
+each with their own personality and directives, stored under `agent/agents/<slug>/`.
 
 ---
 
-## Log Entry Format
+## Layout
 
-Each entry is a JSON object:
-```json
-{
-  "type": "action" | "pr_merged",
-  "player": "Wolf",
-  "message": "Wolf joined the world",
-  "timestamp": "2026-05-28T12:34:56.789Z"
-}
+Three panels left-to-right:
+
+### Left panel — Agent Roster (~35% width)
+- Lists all agents discovered by scanning `agent/agents/*/character.md`
+- Each agent shows a status indicator: `● Running` (green dot) or `○ Stopped` (gray dot)
+- Selected agent is highlighted
+- Hint at bottom: `[n] new  [del] delete  [↑↓] select`
+- If no agents exist, shows a prompt to create one with `[n]`
+
+### Middle panel — Agent Config (~40% width)
+- Shows config for the currently selected agent
+- Displays agent name (editable via `[r]` rename)
+- Personality: presets (Diplomat/Explorer/Builder/Schemer) + Custom
+  - `[↑↓]` navigates presets; `[Enter]` applies selected preset
+  - `[e]` opens custom personality editor
+- Directives: list of up to 3
+  - `[a]` add, `[d]` delete selected, `[e]` edit selected
+- All changes save immediately to `agent/agents/<slug>/character.md`
+- Focus toggles between personality list and directives list via `[Tab]`
+
+### Right panel — Leaderboard (~25% width)
+- Fetches `/leaderboard` every 30 seconds
+- Shows rank, name, PRs merged, world changes
+- `[r]` to manually refresh
+
+### Bottom action bar
+- `[s]` Start selected agent
+- `[x]` Stop selected agent
+- `[Tab]` cycle focus between left/middle panels
+- `[q]` quit
+
+---
+
+## Storage Layout
+
+```
+agent/agents/
+  <slug>/
+    character.md    — same format as current character.md
+    pid             — PID of running claude process (if any), absent if stopped
+```
+
+No index file — directory scan at startup.
+
+---
+
+## character.md Format
+
+```markdown
+# Character: <Name>
+
+## Personality
+<text>
+
+## Directives
+- directive 1
+- directive 2
 ```
 
 ---
 
-## What Triggers Log Entries
+## Agent Lifecycle
 
-### Player events (type: "action")
-- **Connect**: `"<Name> joined the world"` — when a player connects
-- **Disconnect**: `"<Name> left the world"` — when a player disconnects
-- **Movement samples**: `"<Name> is exploring"` — logged every ~10 move events per player to capture activity without flooding
+### Creating
+- Press `[n]` to create a new agent
+- Prompt for a name
+- Slugify: `name.toLowerCase().replace(/\s+/g, '-')`
+- Create `agent/agents/<slug>/character.md` with Explorer preset, empty directives
+- Select the new agent immediately
 
-### PR events (type: "pr_merged")
-- Posted externally via `POST /log-event`
-- The governance workflow calls this when a PR is merged
-- Message e.g. `"PR #42: Add river was merged"`
+### Deleting
+- Press `[del]` to delete selected agent
+- If the agent is running, stop it first
+- Prompt "Delete <name>? [y/N]"
+- If confirmed: `rm -rf agent/agents/<slug>/`
+- Select the next agent in the list (or previous if it was the last)
 
----
+### Starting
+- Press `[s]` on a stopped agent
+- Spawns `claude --dangerously-skip-permissions /start` with cwd `agent/agents/<slug>/`
+- Detached, stdio ignored, unref'd so TUI continues
+- Write child PID to `agent/agents/<slug>/pid`
+- Status immediately updates to Running
 
-## Server Endpoints
-
-### GET /log
-Returns the last 50 entries as a JSON array, newest last.
-- No auth required
-- Response: `[{ type, player, message, timestamp }]`
-- Empty array `[]` if no entries yet
-
-### POST /log-event
-Accepts externally-posted log entries (e.g., governance workflow on PR merge).
-- Body: `{ type: "pr_merged", player: string|null, message: string }`
-- Appends to buffer with server-assigned timestamp
-- Returns `{ ok: true }`
-- Returns 400 if type or message is missing
-
-## In-Memory Buffer
-- Max 100 entries (oldest dropped when full)
-- Not persisted across restarts
+### Stopping
+- Press `[x]` on a running agent
+- Reads PID from `agent/agents/<slug>/pid`
+- Sends SIGTERM
+- Deletes the `pid` file
+- Status updates to Stopped
 
 ---
 
-## Frontend Log Panel
+## PID Lifecycle
 
-### Position & Size
-- Fixed to bottom-right corner of the game canvas (screen-space, not world-space)
-- Width ~300px, height ~180px
-- Does NOT scroll with camera — stays fixed on screen
-
-### Visual Style
-- Semi-transparent dark background (~70% opacity black)
-- Subtle rounded corners, small padding (8px)
-- Does not block game interaction (pointer-events: none)
-
-### Content
-- Shows last 8–10 entries, newest at the bottom
-- Each entry: short timestamp (`HH:MM:SS`), player name in their assigned color, message in light gray
-- If no entries: faint placeholder "No activity yet"
-
-### Data Loading
-- On scene load: fetch GET /log from the server URL
-- Poll every 5 seconds for updates
-- If server is unreachable: panel stays visible but empty (fail silently)
-
-### Implementation
-- Panel is a fixed HTML div appended to the game container — does NOT use world-space Phaser objects
+- On startup: for each agent with a `pid` file, call `process.kill(pid, 0)`
+  - If it throws: process is dead → delete `pid` file, show Stopped
+  - If it succeeds: process is alive → show Running
+- Spawn: `child_process.spawn` with `{ detached: true, stdio: 'ignore' }`, then `child.unref()`
+- Stop: `process.kill(pid, 'SIGTERM')` + delete `pid` file
 
 ---
 
 ## Definition of Done
 
-1. Log panel appears in game at bottom-right, even when offline
-2. Player connect/disconnect entries appear in the feed within 5 seconds
-3. Movement entries appear periodically (~1 per 10 move emits per player)
-4. `GET /log` returns valid JSON array with correct schema
-5. `POST /log-event` with a PR merge body causes that entry to appear within 5 seconds
-6. Panel doesn't block game view — game input still works
-7. `npm run build` passes with no errors
+1. TUI launches with `npm run tui` from `agent/` directory
+2. Left panel shows all agents in `agent/agents/` with correct status indicators
+3. Creating a new agent (via `[n]`) creates the directory/file structure, selects it, and shows it in the roster
+4. Editing personality or directives in the middle panel saves immediately to disk
+5. Changes persist after quitting and relaunching — confirmed by relaunch
+6. Deleting an agent removes the directory (after y/N confirm) and updates the roster
+7. Starting an agent writes a PID file; stopping it removes the PID file
+8. PID staleness check on startup: stale PIDs are cleaned up automatically
+9. Leaderboard panel fetches data and displays it (or shows error if server offline)
+10. `[Tab]` cycles focus between left roster and middle config panels
+11. No crash when there are zero agents
+12. Rename via `[r]` updates the name in `character.md` header and refreshes the roster display
