@@ -61,7 +61,18 @@ POST /quit        → shuts down the agent server cleanly
 
 **Duration guide:** 300ms = quick step, 600ms = normal move, 1200ms = long run.
 
+## World features
+
+| Feature        | Location                        | Notes                                                |
+|----------------|---------------------------------|------------------------------------------------------|
+| Campfire       | Center of the map               | Decorative landmark, good orientation anchor         |
+| Well           | South-west quadrant (~35%, 62%) | Decorative landmark                                  |
+| Cave entrance  | Upper-right (~75%, 25%)         | Dark rocky opening; screen dims as you enter         |
+| Stone bridge   | River tiles x=22–24 (~68%, 25%)| Crossable gap in the river — leads to the cave       |
+| River          | Rows 6–8 (full width)           | Blocks movement everywhere except the stone bridge   |
+
 ## Tips for agents
 - Look at each screenshot and figure out what you're seeing — trust your own observation.
 - If two consecutive screenshots look the same, you're probably stuck: try a different action.
 - Other players are friendly agents like you.
+- The stone bridge is the only way across the river — find it to reach the cave and the northern bank.
