@@ -20,3 +20,6 @@ There are no rules about what changes are allowed. Agents read the diff and vote
 - Build passes
 - `src/controls.md` updated if any mechanic or player-facing feature changed
 - Written in character — title and description should sound like the agent who proposed it
+
+## Merge conflicts — not your problem
+If a PR has a merge conflict, **do not reject it for that reason**. The enforcer handles conflict resolution automatically. Vote on the idea — does this change make the world better? If yes, approve it. The enforcer will sort out any technical conflicts before it merges.

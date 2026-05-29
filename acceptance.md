@@ -1,50 +1,51 @@
-# Acceptance: enforcer-conflict-resolution
+# Acceptance Criteria: GitHub Profile Identity
 
-## Feature
-The enforcer automatically detects and resolves merge conflicts on open PRs, removing the need for agents to handle git mechanics.
+## Feature overview
+The leaderboard and voting system tracks GitHub profiles instead of individual socket connections. A player with 3 agents running should still count as one identity for leaderboard aggregation and voting.
 
-## User Flows
+## User flows
 
-### Happy path — resolvable conflict
-1. A PR has accumulated votes and, during governance polling, `prData.mergeable === false`
-2. The enforcer detects this (replaces the existing "post a comment and skip" path)
-3. The enforcer clones the repo to `/tmp/living-game-resolve-<prNumber>` (or re-uses if dir already exists from a prior partial run)
-4. Checks out the PR branch, runs `git merge origin/main`
-5. Collects files with `<<<<<<<` conflict markers
-6. For each conflicted file, sends the raw conflict text to DeepSeek with context that it's a game world file and both contributions should be preserved where possible
-7. Writes resolved content back, runs `git add`, `git commit -m "Auto-resolve merge conflict with main"`
-8. Pushes to the PR branch via `git push origin HEAD:<branchName>`
-9. Posts a GitHub comment listing the resolved files and a brief summary of what changed
-10. Cleans up the temp directory
-11. The enforcer does NOT merge or approve the PR — governance picks it up on the next poll cycle as normal
+### 1. Agent connects with GitHub identity
+- When `agent/server.js` starts, it runs `gh api user --jq .login` to obtain the GitHub username of the machine's logged-in user.
+- The GitHub username is passed as the query param `?gh=<username>` when navigating to the game URL (alongside the existing `?characterName=` param).
+- If `gh api user` fails (not logged in, no gh CLI), the agent falls back gracefully — it still opens the game without the `?gh=` param.
+- `WorldScene.js` reads `new URLSearchParams(window.location.search).get('gh')` and sends `githubUser` alongside the character name in the `player:identify` event.
 
-### Semantic conflict — DeepSeek says incompatible
-1. Enforcer runs conflict resolution but DeepSeek signals the two changes are fundamentally incompatible
-2. Enforcer closes the PR via GitHub API
-3. Posts a comment explaining the incompatibility (surfaces DeepSeek's reasoning)
-4. Cleans up temp dir
+### 2. Server stores GitHub username per socket
+- `server/index.js` stores `githubUser` on each player entry (alongside `id`, `color`, `name`).
+- If no GitHub username was sent, `githubUser` is `null`.
+- The assigned animal name is still used as the in-game display name.
 
-### CI failure after auto-resolution
-1. On a subsequent poll cycle, enforcer checks the CI status of the PR's current SHA
-2. If CI failed on a SHA that the enforcer previously auto-resolved, the enforcer closes the PR with a note that auto-resolution produced broken code
+### 3. Leaderboard aggregates by GitHub profile
+- `GET /leaderboard` aggregates entries by `githubUser` when present.
+- Multiple sockets sharing the same `githubUser` have their `prsmerged` and `worldChanges` summed.
+- Players without a `githubUser` appear as individual entries keyed by their assigned name.
+- Response shape per entry: `{ displayName, githubUser, color, prsmerged, worldChanges }`.
+- `displayName` is the `githubUser` when present, otherwise the assigned animal name.
 
-### Already-resolved guard
-1. In-memory map `resolvedConflicts: Map<prNumber, resolvedSha>` tracks what was already resolved
-2. If the PR's HEAD SHA matches the stored `resolvedSha`, skip re-resolution
-3. If the PR's HEAD SHA changes (new push), remove it from the map so a fresh resolution can run if needed
+### 4. One vote per GitHub profile per PR
+- Votes are keyed by `githubUser` (or fall back to socket ID if `githubUser` is null).
+- If a user's second agent tries to vote on the same PR, the vote is silently ignored (already voted).
+- The vote from their first agent remains in effect.
+- Counting (yes/no) reflects unique voters, not socket count.
 
-## Definition of Done
-- `enforcer/index.js` handles `mergeable === false` by auto-resolving rather than only posting a "has conflicts" comment
-- Git operations use `/tmp/living-game-resolve-<pr>` and clean up after
-- No additional npm dependencies — uses Node.js `child_process` for git commands
-- DeepSeek receives a well-formed prompt that: (a) provides conflict-marked file content, (b) asks for a clean resolved version, (c) explains the game world context and asks to preserve both contributions where possible
-- Semantic incompatibility closes the PR with an explanation comment
-- CI-failure-after-resolution closes the PR with a note
-- In-memory dedup map prevents re-resolving same SHA on every poll cycle
-- Enforcer does NOT approve or merge — just pushes the resolved commit
-- Logs progress clearly at each step (clone, merge, files resolved, push, etc.)
+### 5. Self-voting is blocked
+- When a `pr:vote` event arrives, the server checks if the voter's `githubUser` matches the PR author's GitHub username (`pr.authorGithubUser`).
+- If they match, the vote is rejected (no-op, logged to console).
+- The PR author's GitHub username is stored on the PR entry when it is first tracked — pulled from the GitHub API (the PR's `user.login` field from the pulls endpoint).
+- PRs with `authorGithubUser: null`: self-vote blocking is skipped (can't tell who the author is).
 
-## Out of Scope
-- Persisting resolved state across restarts (in-memory only)
-- Recovering a partially failed push by retrying (fail gracefully, log, leave PR open)
-- Handling binary file conflicts
+## Edge cases
+- Agent without gh CLI: `gh api user` command fails — agent opens game without `?gh=` param. Works exactly like before.
+- Two agents same GitHub user: leaderboard shows one row, votes deduped.
+- Player with no `githubUser` votes: vote is keyed by socket ID (existing behavior).
+- PR with no `authorGithubUser`: self-vote block is not enforced (insufficient data).
+- GitHub username contains special characters: URL-encoded when passed as query param.
+
+## Definition of done
+- `npm run build` passes without errors.
+- Agent startup logs the resolved GitHub username (or "no GitHub user detected").
+- Leaderboard endpoint returns aggregated data (manually verifiable by reading the code logic).
+- Vote dedup logic is clearly keyed by `githubUser || socket.id`.
+- Self-vote block fires when `voter.githubUser === pr.authorGithubUser` (both non-null).
+- PR author stored on first `pollGitHub` that discovers the PR.
