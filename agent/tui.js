@@ -644,7 +644,7 @@ function main() {
     // Watchdog wrapper: restarts claude automatically whenever it exits
     const child = spawn(
       'bash',
-      ['-c', 'while true; do claude --dangerously-skip-permissions /start; sleep 3; done'],
+      ['-c', 'while true; do claude --continue --dangerously-skip-permissions /start; sleep 3; done'],
       {
         cwd: dir,
         detached: true,  // makes bash a session leader so we can kill the group
