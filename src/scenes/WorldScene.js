@@ -112,6 +112,16 @@ export default class WorldScene extends Phaser.Scene {
       .setOrigin(0.5, 0.5)
       .setDepth(wellY + meta.well.h / 2);
 
+    // --- Ancient ruins (north-west, above the river) ------------------------
+    // Crumbling stone pillars — a forgotten stronghold on the north bank.
+    // Purely visual landmark — no collision.
+    const ruinsX = Math.round(this.worldW * 0.20);
+    const ruinsY = Math.round(this.worldH * 0.12);
+    this.add
+      .image(ruinsX, ruinsY, 'ruins')
+      .setOrigin(0.5, 0.5)
+      .setDepth(ruinsY + meta.ruins.h / 2);
+
     // --- Player -------------------------------------------------------------
     const spawn = this.findClearSpawn(placements, T);
     this.player = this.physics.add.sprite(spawn.x, spawn.y, 'player-down');

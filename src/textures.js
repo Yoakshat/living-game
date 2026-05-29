@@ -541,6 +541,93 @@ function makeBridgeTexture(scene, key) {
   g.destroy();
 }
 
+// --- Ancient ruins ---------------------------------------------------------
+// Two crumbling stone pillars on a broken foundation — remnants of a forgotten
+// stronghold. Dark basalt palette with faint violet undertones.
+const RUINS_W = 96;
+const RUINS_H = 96;
+
+function makeRuinsTexture(scene, key) {
+  const g = scene.make.graphics({ x: 0, y: 0, add: false });
+  const cx = RUINS_W / 2;
+  const cy = RUINS_H / 2 + 4;
+
+  // Ground shadow.
+  g.fillStyle(0x000000, 0.28);
+  g.fillEllipse(cx, cy + 18, 72, 20);
+
+  // Cracked stone floor slab.
+  g.fillStyle(0x2e2a38, 1);
+  g.fillRoundedRect(cx - 34, cy - 4, 68, 28, 3);
+  g.fillStyle(0x1a1820, 0.6);
+  g.fillRect(cx - 32, cy + 8, 64, 2);   // crack line
+  g.fillRect(cx + 4, cy - 4, 2, 28);    // crack line
+  g.fillStyle(0x4a4558, 0.5);
+  g.fillRect(cx - 34, cy - 4, 68, 4);   // lit top edge
+
+  // Left pillar — taller, partially intact.
+  const lx = cx - 20;
+  const pillarBaseY = cy - 4;
+  // Base block
+  g.fillStyle(0x2e2a38, 1);
+  g.fillRect(lx - 9, pillarBaseY - 44, 18, 48);
+  // Shading
+  g.fillStyle(0x1a1820, 0.7);
+  g.fillRect(lx + 4, pillarBaseY - 44, 5, 48);
+  // Highlight
+  g.fillStyle(0x5a5470, 0.6);
+  g.fillRect(lx - 9, pillarBaseY - 44, 4, 44);
+  // Carved horizontal bands (Imperial-style detail)
+  g.fillStyle(0x1a1820, 0.5);
+  g.fillRect(lx - 9, pillarBaseY - 32, 18, 2);
+  g.fillRect(lx - 9, pillarBaseY - 20, 18, 2);
+  // Broken top — jagged edge
+  g.fillStyle(0x2e2a38, 1);
+  g.fillTriangle(lx - 9, pillarBaseY - 44, lx - 2, pillarBaseY - 56, lx + 4, pillarBaseY - 44);
+  g.fillTriangle(lx + 4, pillarBaseY - 44, lx + 9, pillarBaseY - 50, lx + 9, pillarBaseY - 44);
+  // Capstone remnant
+  g.fillStyle(0x3e3a4e, 1);
+  g.fillRect(lx - 10, pillarBaseY - 46, 20, 4);
+
+  // Right pillar — shorter, more damaged.
+  const rx = cx + 18;
+  g.fillStyle(0x2e2a38, 1);
+  g.fillRect(rx - 8, pillarBaseY - 28, 16, 32);
+  g.fillStyle(0x1a1820, 0.7);
+  g.fillRect(rx + 3, pillarBaseY - 28, 5, 32);
+  g.fillStyle(0x5a5470, 0.6);
+  g.fillRect(rx - 8, pillarBaseY - 28, 4, 28);
+  g.fillStyle(0x1a1820, 0.5);
+  g.fillRect(rx - 8, pillarBaseY - 18, 16, 2);
+  // Broken top
+  g.fillStyle(0x2e2a38, 1);
+  g.fillTriangle(rx - 8, pillarBaseY - 28, rx - 1, pillarBaseY - 36, rx + 8, pillarBaseY - 28);
+
+  // Rubble scattered at the base.
+  const rubble = [
+    { x: cx - 30, y: cy + 14, w: 10, h: 6 },
+    { x: cx + 24, y: cy + 18, w: 8, h: 5 },
+    { x: cx - 8, y: cy + 22, w: 12, h: 5 },
+    { x: cx + 10, y: cy + 10, w: 6, h: 4 },
+  ];
+  for (const r of rubble) {
+    g.fillStyle(0x2e2a38, 1);
+    g.fillRoundedRect(r.x, r.y, r.w, r.h, 1);
+    g.fillStyle(0x5a5470, 0.5);
+    g.fillRoundedRect(r.x, r.y, r.w, 2, 1);
+  }
+
+  // Faint violet energy shimmer between the pillars (Force resonance).
+  g.fillStyle(0x6a30aa, 0.08);
+  g.fillEllipse(cx, cy - 10, 28, 36);
+  g.fillStyle(0x8844cc, 0.06);
+  g.fillEllipse(cx, cy - 14, 14, 22);
+
+  g.generateTexture(key, RUINS_W, RUINS_H);
+  g.destroy();
+  return { w: RUINS_W, h: RUINS_H };
+}
+
 // Generate everything; returns metadata the scene needs for sizing/bodies.
 export function generateTextures(scene) {
   const grassVariants = 4;
@@ -563,6 +650,8 @@ export function generateTextures(scene) {
   // Stone bridge tile (used for the cave river crossing).
   makeBridgeTexture(scene, 'bridge');
 
+  const ruins = makeRuinsTexture(scene, 'ruins');
+
   return {
     tile: TILE,
     grassVariants,
@@ -573,5 +662,6 @@ export function generateTextures(scene) {
     campfire,
     cave,
     well,
+    ruins,
   };
 }
