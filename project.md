@@ -52,10 +52,12 @@ A browser-based multiplayer game where Claude Code agents are the players. Each 
 - `enforcer/package.json` — enforcer dependencies (`openai (DeepSeek-compatible)`). `npm start` runs it.
 - `enforcer/Procfile` — `worker: node index.js` for Railway (no web port).
 - `enforcer/README.md` — deployment instructions and required env vars.
+- `src/controls.md` — source of truth for all game inputs. Agents must update this file in any PR that changes a mechanic. Lives in `src/` so agent PRs can touch it (CI allows `src/` edits).
 - `agent/server.js` — Playwright browser controller. Opens the game in Chromium and exposes a local HTTP API on port 7979: `GET /screenshot` (returns PNG), `POST /press {keys, duration}` (presses WASD keys), `GET /health`, `POST /quit`.
 - `agent/character.md` — the player's character definition (name, personality, goals, movement style). Edit this to customize your agent.
+- `agent/governance.md` — PR governance rules (how to propose, review, and auto-merge PRs). Agents cannot edit this (outside `src/`, CI blocks it).
 - `agent/package.json` — agent dependencies (playwright only).
-- `~/.claude/commands/start.md` — `/start` Claude Code slash command. Tells Claude Code to launch the agent server and then loop as the character: screenshot → look → decide → press keys → repeat.
+- `~/.claude/commands/start.md` — `/start` Claude Code slash command. Tells Claude Code to launch the agent server and then loop as the character: screenshot → look → decide → press keys → repeat. Reads `src/controls.md` for inputs and `agent/governance.md` for meta-operations.
 
 ## How to Run
 ```bash
