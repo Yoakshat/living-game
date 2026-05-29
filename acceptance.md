@@ -1,93 +1,51 @@
-# Acceptance: game-log
+# Acceptance Criteria: GitHub Profile Identity
 
-## What This Is
+## Feature overview
+The leaderboard and voting system tracks GitHub profiles instead of individual socket connections. A player with 3 agents running should still count as one identity for leaderboard aggregation and voting.
 
-A living public feed showing recent activity in the game world. Anyone can load the game and see what agents have been doing and what PRs have been merged — no agent required.
+## User flows
 
----
+### 1. Agent connects with GitHub identity
+- When `agent/server.js` starts, it runs `gh api user --jq .login` to obtain the GitHub username of the machine's logged-in user.
+- The GitHub username is passed as the query param `?gh=<username>` when navigating to the game URL (alongside the existing `?characterName=` param).
+- If `gh api user` fails (not logged in, no gh CLI), the agent falls back gracefully — it still opens the game without the `?gh=` param.
+- `WorldScene.js` reads `new URLSearchParams(window.location.search).get('gh')` and sends `githubUser` alongside the character name in the `player:identify` event.
 
-## Log Entry Format
+### 2. Server stores GitHub username per socket
+- `server/index.js` stores `githubUser` on each player entry (alongside `id`, `color`, `name`).
+- If no GitHub username was sent, `githubUser` is `null`.
+- The assigned animal name is still used as the in-game display name.
 
-Each entry is a JSON object:
-```json
-{
-  "type": "action" | "pr_merged",
-  "player": "Wolf",
-  "message": "Wolf joined the world",
-  "timestamp": "2026-05-28T12:34:56.789Z"
-}
-```
+### 3. Leaderboard aggregates by GitHub profile
+- `GET /leaderboard` aggregates entries by `githubUser` when present.
+- Multiple sockets sharing the same `githubUser` have their `prsmerged` and `worldChanges` summed.
+- Players without a `githubUser` appear as individual entries keyed by their assigned name.
+- Response shape per entry: `{ displayName, githubUser, color, prsmerged, worldChanges }`.
+- `displayName` is the `githubUser` when present, otherwise the assigned animal name.
 
----
+### 4. One vote per GitHub profile per PR
+- Votes are keyed by `githubUser` (or fall back to socket ID if `githubUser` is null).
+- If a user's second agent tries to vote on the same PR, the vote is silently ignored (already voted).
+- The vote from their first agent remains in effect.
+- Counting (yes/no) reflects unique voters, not socket count.
 
-## What Triggers Log Entries
+### 5. Self-voting is blocked
+- When a `pr:vote` event arrives, the server checks if the voter's `githubUser` matches the PR author's GitHub username (`pr.authorGithubUser`).
+- If they match, the vote is rejected (no-op, logged to console).
+- The PR author's GitHub username is stored on the PR entry when it is first tracked — pulled from the GitHub API (the PR's `user.login` field from the pulls endpoint).
+- PRs with `authorGithubUser: null`: self-vote blocking is skipped (can't tell who the author is).
 
-### Player events (type: "action")
-- **Connect**: `"<Name> joined the world"` — when a player connects
-- **Disconnect**: `"<Name> left the world"` — when a player disconnects
-- **Movement samples**: `"<Name> is exploring"` — logged every ~10 move events per player to capture activity without flooding
+## Edge cases
+- Agent without gh CLI: `gh api user` command fails — agent opens game without `?gh=` param. Works exactly like before.
+- Two agents same GitHub user: leaderboard shows one row, votes deduped.
+- Player with no `githubUser` votes: vote is keyed by socket ID (existing behavior).
+- PR with no `authorGithubUser`: self-vote block is not enforced (insufficient data).
+- GitHub username contains special characters: URL-encoded when passed as query param.
 
-### PR events (type: "pr_merged")
-- Posted externally via `POST /log-event`
-- The governance workflow calls this when a PR is merged
-- Message e.g. `"PR #42: Add river was merged"`
-
----
-
-## Server Endpoints
-
-### GET /log
-Returns the last 50 entries as a JSON array, newest last.
-- No auth required
-- Response: `[{ type, player, message, timestamp }]`
-- Empty array `[]` if no entries yet
-
-### POST /log-event
-Accepts externally-posted log entries (e.g., governance workflow on PR merge).
-- Body: `{ type: "pr_merged", player: string|null, message: string }`
-- Appends to buffer with server-assigned timestamp
-- Returns `{ ok: true }`
-- Returns 400 if type or message is missing
-
-## In-Memory Buffer
-- Max 100 entries (oldest dropped when full)
-- Not persisted across restarts
-
----
-
-## Frontend Log Panel
-
-### Position & Size
-- Fixed to bottom-right corner of the game canvas (screen-space, not world-space)
-- Width ~300px, height ~180px
-- Does NOT scroll with camera — stays fixed on screen
-
-### Visual Style
-- Semi-transparent dark background (~70% opacity black)
-- Subtle rounded corners, small padding (8px)
-- Does not block game interaction (pointer-events: none)
-
-### Content
-- Shows last 8–10 entries, newest at the bottom
-- Each entry: short timestamp (`HH:MM:SS`), player name in their assigned color, message in light gray
-- If no entries: faint placeholder "No activity yet"
-
-### Data Loading
-- On scene load: fetch GET /log from the server URL
-- Poll every 5 seconds for updates
-- If server is unreachable: panel stays visible but empty (fail silently)
-
-### Implementation
-- Panel is a fixed HTML div appended to the game container — does NOT use world-space Phaser objects
-
----
-
-## Definition of Done
-
-1. Log panel appears in game at bottom-right, even when offline
-2. Player connect/disconnect entries appear in the feed within 5 seconds
-3. Movement entries appear periodically (~1 per 10 move emits per player)
-4. `GET /log` returns valid JSON array with correct schema
-5. `POST /log-event` with a PR merge body causes that entry to appear within 5 seconds
-6. Panel doesn't block game view — game input still works
-7. `npm run build` passes with no errors
+## Definition of done
+- `npm run build` passes without errors.
+- Agent startup logs the resolved GitHub username (or "no GitHub user detected").
+- Leaderboard endpoint returns aggregated data (manually verifiable by reading the code logic).
+- Vote dedup logic is clearly keyed by `githubUser || socket.id`.
+- Self-vote block fires when `voter.githubUser === pr.authorGithubUser` (both non-null).
+- PR author stored on first `pollGitHub` that discovers the PR.

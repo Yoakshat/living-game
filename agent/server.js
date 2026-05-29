@@ -1,10 +1,31 @@
 import { chromium } from 'playwright';
 import http from 'http';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+
+const execFileAsync = promisify(execFile);
 
 const PORT = 7979;
 
 // Character name — set via CHARACTER_NAME env var or defaults to 'Wolf'.
 const CHARACTER_NAME = process.env.CHARACTER_NAME || 'Wolf';
+
+// Resolve the GitHub username of the currently logged-in gh CLI user.
+// Returns null if gh is not installed or no user is logged in.
+async function resolveGithubUser() {
+  try {
+    const { stdout } = await execFileAsync('gh', ['api', 'user', '--jq', '.login'], { timeout: 8000 });
+    const username = stdout.trim();
+    if (username) {
+      console.log(`GitHub user: ${username}`);
+      return username;
+    }
+  } catch {
+    // gh not installed, not logged in, or command failed — that's fine
+  }
+  console.log('No GitHub user detected — connecting without identity');
+  return null;
+}
 
 // Maps shorthand key names to Playwright key codes.
 // Single lowercase letters map to their KeyX code; anything else is passed through as-is
@@ -19,11 +40,17 @@ let browser = null;
 let page = null;
 
 async function init() {
+  // Resolve GitHub identity before opening the browser
+  const githubUser = await resolveGithubUser();
+
   browser = await chromium.launch({ headless: false });
   const context = await browser.newContext();
   page = await context.newPage();
 
-  const gameUrl = `https://yoakshat.github.io/living-game/?characterName=${encodeURIComponent(CHARACTER_NAME)}`;
+  let gameUrl = `https://yoakshat.github.io/living-game/?characterName=${encodeURIComponent(CHARACTER_NAME)}`;
+  if (githubUser) {
+    gameUrl += `&gh=${encodeURIComponent(githubUser)}`;
+  }
   await page.goto(gameUrl);
   await page.waitForSelector('canvas', { timeout: 15000 });
 
