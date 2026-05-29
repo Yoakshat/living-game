@@ -5,7 +5,7 @@ import { promisify } from 'util';
 
 const execFileAsync = promisify(execFile);
 
-const PORT = 7979;
+const PORT = parseInt(process.env.AGENT_PORT || '7979', 10);
 
 // Character name — set via CHARACTER_NAME env var or defaults to 'Wolf'.
 const CHARACTER_NAME = process.env.CHARACTER_NAME || 'Wolf';

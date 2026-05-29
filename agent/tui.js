@@ -62,6 +62,31 @@ function pidPath(slug) {
   return path.join(agentDir(slug), 'pid');
 }
 
+function portFilePath(slug) {
+  return path.join(agentDir(slug), 'port');
+}
+
+function readPort(slug) {
+  const p = portFilePath(slug);
+  if (!fs.existsSync(p)) return null;
+  const n = parseInt(fs.readFileSync(p, 'utf8').trim(), 10);
+  return isNaN(n) ? null : n;
+}
+
+function assignPort() {
+  const used = new Set();
+  if (fs.existsSync(AGENTS_DIR)) {
+    for (const entry of fs.readdirSync(AGENTS_DIR, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const p = readPort(entry.name);
+      if (p !== null) used.add(p);
+    }
+  }
+  let port = 7979;
+  while (used.has(port)) port++;
+  return port;
+}
+
 function defaultCharacterMd(name) {
   return `# Character: ${name}\n\n## Personality\n${PRESETS.Explorer}\n\n## Directives\n`;
 }
@@ -608,6 +633,7 @@ function main() {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
       writeCharacterMd(slug, defaultCharacterMd(name));
+      fs.writeFileSync(portFilePath(slug), String(assignPort()), 'utf8');
     }
     agents = scanAgents();
     const newIdx = agents.findIndex((a) => a.slug === slug);
