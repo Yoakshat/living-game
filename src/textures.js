@@ -501,6 +501,81 @@ function makeWellTexture(scene, key) {
   return { w: WELL_W, h: WELL_H };
 }
 
+// --- Forge -----------------------------------------------------------------
+// A craftsperson's forge on the north bank: stone base, glowing coals, anvil.
+// Warm orange glow contrasts with the cool grey of the cave across the bank.
+const FORGE_W = 64;
+const FORGE_H = 64;
+
+function makeForgeTexture(scene, key) {
+  const g = scene.make.graphics({ x: 0, y: 0, add: false });
+  const cx = FORGE_W / 2;
+  const cy = FORGE_H / 2 + 4;
+
+  // Ground shadow.
+  g.fillStyle(0x000000, 0.25);
+  g.fillEllipse(cx, cy + 20, 52, 14);
+
+  // Warm coal glow on ground.
+  g.fillStyle(0xff6600, 0.18);
+  g.fillEllipse(cx, cy + 8, 48, 20);
+
+  // Stone forge body — dark iron-stained stone, trapezoidal (wider at base).
+  g.fillStyle(0x4a3e32, 1);
+  g.fillRect(cx - 20, cy - 14, 40, 28);
+  // Base wider section.
+  g.fillStyle(0x3a2e24, 1);
+  g.fillRect(cx - 22, cy + 8, 44, 8);
+
+  // Stone texture highlights on forge body.
+  g.fillStyle(0x6a5a48, 0.6);
+  g.fillRect(cx - 18, cy - 12, 8, 4);
+  g.fillRect(cx + 6, cy - 6, 10, 4);
+  g.fillStyle(0x2a1e14, 0.5);
+  g.fillRect(cx - 20, cy + 2, 40, 2);
+
+  // Chimney stack (shorter, squat).
+  g.fillStyle(0x3a3028, 1);
+  g.fillRect(cx - 8, cy - 26, 16, 14);
+  g.fillStyle(0x4a4038, 1);
+  g.fillRect(cx - 10, cy - 28, 20, 4);
+
+  // Smoke wisps from chimney.
+  g.fillStyle(0x888070, 0.35);
+  g.fillEllipse(cx - 2, cy - 34, 8, 6);
+  g.fillStyle(0x888070, 0.2);
+  g.fillEllipse(cx + 3, cy - 40, 6, 5);
+
+  // Hot coal opening — bright center glow.
+  g.fillStyle(0xff4400, 0.9);
+  g.fillRect(cx - 12, cy + 2, 24, 10);
+  g.fillStyle(0xff8800, 0.95);
+  g.fillRect(cx - 9, cy + 4, 18, 6);
+  g.fillStyle(0xffcc44, 1);
+  g.fillRect(cx - 5, cy + 5, 10, 4);
+
+  // Anvil on top of forge.
+  // Anvil horn (left tapered point).
+  g.fillStyle(0x555050, 1);
+  g.fillTriangle(cx - 18, cy - 16, cx - 10, cy - 14, cx - 10, cy - 18);
+  // Anvil body (wide flat top).
+  g.fillStyle(0x606060, 1);
+  g.fillRect(cx - 10, cy - 20, 26, 8);
+  // Anvil waist (narrow middle).
+  g.fillStyle(0x505050, 1);
+  g.fillRect(cx - 6, cy - 12, 18, 4);
+  // Anvil base (wider again).
+  g.fillStyle(0x585858, 1);
+  g.fillRect(cx - 8, cy - 8, 22, 4);
+  // Anvil top highlight.
+  g.fillStyle(0x909090, 0.8);
+  g.fillRect(cx - 10, cy - 20, 26, 2);
+
+  g.generateTexture(key, FORGE_W, FORGE_H);
+  g.destroy();
+  return { w: FORGE_W, h: FORGE_H };
+}
+
 // --- Stone bridge tile -----------------------------------------------------
 // A single horizontal tile of stone bridge planks. Laid across the river to
 // form a crossing. Warm grey stone with wood-plank detail and a subtle shadow
@@ -559,6 +634,7 @@ export function generateTextures(scene) {
   }
   const cave = makeCaveTexture(scene, 'cave');
   const well = makeWellTexture(scene, 'well');
+  const forge = makeForgeTexture(scene, 'forge');
 
   // Stone bridge tile (used for the cave river crossing).
   makeBridgeTexture(scene, 'bridge');
@@ -573,5 +649,6 @@ export function generateTextures(scene) {
     campfire,
     cave,
     well,
+    forge,
   };
 }

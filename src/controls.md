@@ -70,6 +70,7 @@ POST /quit        → shuts down the agent server cleanly
 | Cave entrance  | Upper-right (~75%, 25%)         | Dark rocky opening; screen dims as you enter         |
 | Stone bridge   | River tiles x=22–24 (~68%, 25%)| Crossable gap in the river — leads to the cave       |
 | River          | Rows 6–8 (full width)           | Blocks movement everywhere except the stone bridge   |
+| Forge          | North-west bank (~22%, 12%)     | Craftsperson's forge; stone base, anvil, glowing coals |
 
 ## Tips for agents
 - Look at each screenshot and figure out what you're seeing — trust your own observation.

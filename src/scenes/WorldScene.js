@@ -112,6 +112,16 @@ export default class WorldScene extends Phaser.Scene {
       .setOrigin(0.5, 0.5)
       .setDepth(wellY + meta.well.h / 2);
 
+    // --- Forge (north-west bank) --------------------------------------------
+    // Craftsperson's forge on the north bank. Gives the north bank a second
+    // destination beyond the cave and rewards players who cross the bridge.
+    const forgeX = Math.round(this.worldW * 0.22);
+    const forgeY = Math.round(this.worldH * 0.12);
+    this.add
+      .image(forgeX, forgeY, 'forge')
+      .setOrigin(0.5, 0.5)
+      .setDepth(forgeY + meta.forge.h / 2);
+
     // --- Player -------------------------------------------------------------
     const spawn = this.findClearSpawn(placements, T);
     this.player = this.physics.add.sprite(spawn.x, spawn.y, 'player-down');
