@@ -282,6 +282,16 @@ app.post('/log-event', (req, res) => {
   res.json({ ok: true });
 });
 
+// Returns open PRs (CI passed) that the given GitHub user hasn't voted on yet
+app.get('/unvoted-prs', (req, res) => {
+  const gh = req.query.gh;
+  if (!gh) return res.status(400).json({ error: 'gh query param required' });
+  const unvoted = [...prs.values()]
+    .filter((pr) => pr.ciPassed && !pr.votes.has(gh))
+    .map((pr) => ({ number: pr.number, title: pr.title, url: pr.url }));
+  res.json(unvoted);
+});
+
 // Governance workflow reads this to decide merge/close
 app.get('/vote-tally', (_req, res) => {
   const activeAgents = players.size;

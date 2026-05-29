@@ -667,16 +667,12 @@ function main() {
     if (existingPid !== null && isProcessAlive(existingPid)) return;
 
     const dir = agentDir(slug);
-    // Watchdog wrapper: restarts claude automatically whenever it exits
-    const child = spawn(
-      'bash',
-      ['-c', 'while true; do claude --continue --dangerously-skip-permissions /start; sleep 3; done'],
-      {
-        cwd: dir,
-        detached: true,  // makes bash a session leader so we can kill the group
-        stdio: 'ignore',
-      },
-    );
+    const startScript = path.join(__dirname, 'start.sh');
+    const child = spawn('bash', [startScript], {
+      cwd: dir,
+      detached: true,  // makes bash a session leader so we can kill the group
+      stdio: 'ignore',
+    });
     child.unref();
     writePid(slug, child.pid);
 

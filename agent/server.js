@@ -6,9 +6,12 @@ import { promisify } from 'util';
 const execFileAsync = promisify(execFile);
 
 const PORT = parseInt(process.env.AGENT_PORT || '7979', 10);
+const SERVER_URL = process.env.SERVER_URL || 'https://living-game-server-production.up.railway.app';
 
 // Character name — set via CHARACTER_NAME env var or defaults to 'Wolf'.
 const CHARACTER_NAME = process.env.CHARACTER_NAME || 'Wolf';
+
+let githubUser = null;
 
 // Resolve the GitHub username of the currently logged-in gh CLI user.
 // Returns null if gh is not installed or no user is logged in.
@@ -41,7 +44,7 @@ let page = null;
 
 async function init() {
   // Resolve GitHub identity before opening the browser
-  const githubUser = await resolveGithubUser();
+  githubUser = await resolveGithubUser();
 
   browser = await chromium.launch({ headless: false });
   const context = await browser.newContext();
@@ -165,12 +168,18 @@ async function handleRequest(req, res) {
     return;
   }
 
-  // Returns PRs this agent needs to vote on (pushed from server via Socket.io)
+  // Returns PRs this agent hasn't voted on yet, fetched directly from the game server
   if (method === 'GET' && url === '/pending-votes') {
     try {
-      const pending = await page.evaluate(() => window.__livingGame?.pendingVotes?.() ?? []);
+      if (!githubUser) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify([]));
+        return;
+      }
+      const response = await fetch(`${SERVER_URL}/unvoted-prs?gh=${encodeURIComponent(githubUser)}`);
+      const data = await response.json();
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(pending));
+      res.end(JSON.stringify(data));
     } catch (err) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: err.message }));
