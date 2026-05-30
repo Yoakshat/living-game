@@ -2,6 +2,23 @@ import { chromium } from 'playwright';
 import http from 'http';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Action log — written to logs/agent-<timestamp>.log so crashes don't erase history.
+const logsDir = path.join(__dirname, 'logs');
+if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir);
+const logFile = path.join(logsDir, `agent-${new Date().toISOString().replace(/[:.]/g, '-')}.log`);
+const logStream = fs.createWriteStream(logFile, { flags: 'a' });
+
+function log(msg) {
+  const line = `[${new Date().toISOString()}] ${msg}`;
+  console.log(line);
+  logStream.write(line + '\n');
+}
 
 const execFileAsync = promisify(execFile);
 
@@ -13,20 +30,20 @@ const CHARACTER_NAME = process.env.CHARACTER_NAME || 'Wolf';
 
 let githubUser = null;
 
-// Resolve the GitHub username of the currently logged-in gh CLI user.
-// Returns null if gh is not installed or no user is logged in.
+// Resolve the GitHub username of the currently authenticated gh CLI user.
+// GH_TOKEN env var (set by the TUI per-agent) is picked up automatically by gh.
 async function resolveGithubUser() {
   try {
     const { stdout } = await execFileAsync('gh', ['api', 'user', '--jq', '.login'], { timeout: 8000 });
     const username = stdout.trim();
     if (username) {
-      console.log(`GitHub user: ${username}`);
+      log(`GitHub user: ${username}`);
       return username;
     }
   } catch {
     // gh not installed, not logged in, or command failed — that's fine
   }
-  console.log('No GitHub user detected — connecting without identity');
+  log('No GitHub user detected — connecting without identity');
   return null;
 }
 
@@ -64,8 +81,8 @@ async function init() {
   const canvas = await page.$('canvas');
   await canvas.click();
 
-  console.log(`Character: ${CHARACTER_NAME}`);
-  console.log('Game loaded — canvas is active');
+  log(`Character: ${CHARACTER_NAME}`);
+  log(`Game loaded — canvas is active`);
 }
 
 async function handleRequest(req, res) {
@@ -81,9 +98,11 @@ async function handleRequest(req, res) {
   if (method === 'GET' && url === '/screenshot') {
     try {
       const buffer = await page.screenshot({ type: 'png' });
+      log('screenshot');
       res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': buffer.length });
       res.end(buffer);
     } catch (err) {
+      log(`screenshot ERROR: ${err.message}`);
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: err.message }));
     }
@@ -97,12 +116,14 @@ async function handleRequest(req, res) {
       try {
         const { keys, duration } = JSON.parse(body);
         const mapped = keys.map((k) => resolveKey(k.toLowerCase()));
+        log(`press [${keys.join('+')}] ${duration}ms`);
         await Promise.all(mapped.map((k) => page.keyboard.down(k)));
         await new Promise((resolve) => setTimeout(resolve, duration));
         await Promise.all(mapped.map((k) => page.keyboard.up(k)));
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true }));
       } catch (err) {
+        log(`press ERROR: ${err.message}`);
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: err.message }));
       }
@@ -194,10 +215,12 @@ async function handleRequest(req, res) {
     req.on('end', async () => {
       try {
         const { pr, vote } = JSON.parse(body);
+        log(`cast-vote PR#${pr} → ${vote}`);
         await page.evaluate(({ pr, vote }) => window.__livingGame.castVote(pr, vote), { pr, vote });
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true }));
       } catch (err) {
+        log(`cast-vote ERROR: ${err.message}`);
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: err.message }));
       }
@@ -230,14 +253,29 @@ process.on('SIGINT', cleanup);
 
 const server = http.createServer(handleRequest);
 
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    log(`PORT ${PORT} already in use — retrying in 3s`);
+    setTimeout(() => server.listen(PORT), 3000);
+  } else {
+    log(`SERVER ERROR: ${err.message}`);
+    process.exit(1);
+  }
+});
+
+process.on('uncaughtException', (err) => {
+  log(`UNCAUGHT EXCEPTION: ${err.stack || err.message}`);
+  process.exit(1);
+});
+
 // Initialize browser then start listening
 init()
   .then(() => {
     server.listen(PORT, () => {
-      console.log(`Agent server ready at http://localhost:${PORT}`);
+      log(`Agent server ready at http://localhost:${PORT} — log: ${logFile}`);
     });
   })
   .catch((err) => {
-    console.error('Failed to initialize browser:', err);
+    log(`INIT FAILED: ${err.stack || err.message}`);
     process.exit(1);
   });
