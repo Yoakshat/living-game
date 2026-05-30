@@ -178,23 +178,13 @@ async function pushAgentProfile(slug) {
   if (!user) return false;
   try {
     const md = readCharacterMd(slug) || '';
-    const nameMatch = md.match(/^#\s+Character:\s*(.+)/m);
-    const name = nameMatch ? nameMatch[1].trim() : slug;
-    const personalityMatch = md.match(/##\s+Personality\s*\n([\s\S]*?)(?=\n##\s|$)/);
-    const personality = personalityMatch ? personalityMatch[1].trim() : '';
-    const directivesMatch = md.match(/##\s+Directives\s*\n([\s\S]*?)(?=\n##\s|$)/);
-    let directives = [];
-    if (directivesMatch) {
-      directives = directivesMatch[1]
-        .split('\n')
-        .map((l) => l.replace(/^[-*\d.]+\s*/, '').trim())
-        .filter(Boolean);
-    }
-    const body = JSON.stringify({ name, personality, directives });
+    const name = parseName(md) || slug;
+    const personality = parseSection(md, 'Personality') || '';
+    const directives = parseDirectives(md);
     const res = await fetch(`${SERVER_URL}/agent-profile/${encodeURIComponent(user)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body,
+      body: JSON.stringify({ name, personality, directives }),
       signal: AbortSignal.timeout(5000),
     });
     return res.ok;
@@ -509,7 +499,6 @@ function main() {
   let syncStatusTimer = null;
   function showSyncStatus(ok) {
     clearTimeout(syncStatusTimer);
-    syncStatus.tags = true;
     if (ok) {
       syncStatus.setContent(' {green-fg}Saved & synced{/green-fg}');
     } else {

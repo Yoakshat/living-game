@@ -28,11 +28,7 @@ const profilesStore = new Map();
 
 function saveProfilesToDisk() {
   try {
-    const obj = {};
-    for (const [user, profile] of profilesStore.entries()) {
-      obj[user] = profile;
-    }
-    fsSync.writeFileSync(PROFILES_PATH, JSON.stringify(obj, null, 2), 'utf8');
+    fsSync.writeFileSync(PROFILES_PATH, JSON.stringify(Object.fromEntries(profilesStore), null, 2), 'utf8');
   } catch (err) {
     console.warn(`[profiles] Could not write profiles.json: ${err.message}`);
   }
