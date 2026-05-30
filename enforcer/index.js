@@ -26,7 +26,7 @@ const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const GITHUB_REPO = 'Yoakshat/living-game';
 
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || '60000', 10);
-const MODEL_TIMEOUT_MS = 30_000;
+const MODEL_TIMEOUT_MS = 120_000;
 const MODEL_MAX_RETRIES = 2;
 
 // Validate required env vars at startup
