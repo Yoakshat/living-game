@@ -1,0 +1,178 @@
+name: Governance
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  pull-requests: write
+  contents: write
+
+jobs:
+  govern:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RAILWAY_SERVER_URL: ${{ secrets.RAILWAY_SERVER_URL }}
+      REPO: Yoakshat/living-game
+
+    steps:
+      - name: Check RAILWAY_SERVER_URL secret
+        run: |
+          if [ -z "$RAILWAY_SERVER_URL" ]; then
+            echo "ERROR: RAILWAY_SERVER_URL secret is not configured. Exiting."
+            exit 1
+          fi
+          echo "RAILWAY_SERVER_URL is set: $RAILWAY_SERVER_URL"
+
+      - name: Sync open PRs with server
+        run: |
+          echo "=== Fetching open PRs from GitHub ==="
+          OPEN_PRS=$(gh pr list --repo "$REPO" --state open --json number,headRefOid --limit 100)
+          echo "Open PRs: $OPEN_PRS"
+
+          echo "$OPEN_PRS" | jq -c '.[]' | while read -r pr; do
+            PR_NUMBER=$(echo "$pr" | jq -r '.number')
+            CURRENT_SHA=$(echo "$pr" | jq -r '.headRefOid')
+
+            echo "--- Syncing PR #$PR_NUMBER (sha: $CURRENT_SHA) ---"
+            SYNC_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$RAILWAY_SERVER_URL/sync-pr" \
+              -H "Content-Type: application/json" \
+              -d "{\"prNumber\": $PR_NUMBER, \"sha\": \"$CURRENT_SHA\"}" || echo "CURL_FAILED")
+
+            HTTP_CODE=$(echo "$SYNC_RESPONSE" | tail -1)
+            BODY=$(echo "$SYNC_RESPONSE" | head -n -1)
+
+            if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
+              echo "  Synced PR #$PR_NUMBER successfully (HTTP $HTTP_CODE)"
+            else
+              echo "  WARNING: Failed to sync PR #$PR_NUMBER (HTTP $HTTP_CODE, body: $BODY) — continuing"
+            fi
+          done
+
+      - name: Process PRs and take action
+        run: |
+          echo "=== Fetching vote tally from server ==="
+          TALLY_RESPONSE=$(curl -s -w "\n%{http_code}" "$RAILWAY_SERVER_URL/vote-tally")
+          HTTP_CODE=$(echo "$TALLY_RESPONSE" | tail -1)
+          TALLY=$(echo "$TALLY_RESPONSE" | head -n -1)
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "ERROR: Failed to fetch vote tally (HTTP $HTTP_CODE). Server may be unreachable. Exiting."
+            echo "Response body: $TALLY"
+            exit 1
+          fi
+
+          echo "Vote tally: $TALLY"
+          NOW=$(date +%s)
+
+          echo "=== Fetching open PRs from GitHub ==="
+          OPEN_PRS=$(gh pr list --repo "$REPO" --state open --json number,headRefOid --limit 100)
+
+          echo "$OPEN_PRS" | jq -c '.[]' | while read -r pr; do
+            PR_NUMBER=$(echo "$pr" | jq -r '.number')
+            CURRENT_SHA=$(echo "$pr" | jq -r '.headRefOid')
+
+            echo ""
+            echo "=============================="
+            echo "Processing PR #$PR_NUMBER (current SHA: $CURRENT_SHA)"
+            echo "=============================="
+
+            # Find this PR in the tally
+            PR_DATA=$(echo "$TALLY" | jq -c --argjson num "$PR_NUMBER" '.prs[] | select(.number == $num)' 2>/dev/null || echo "")
+
+            if [ -z "$PR_DATA" ]; then
+              echo "  No server record for PR #$PR_NUMBER — skipping (outside voting system)"
+              continue
+            fi
+
+            APPROVED_SHA=$(echo "$PR_DATA" | jq -r '.approvedSha // ""')
+            ENFORCER_STATE=$(echo "$PR_DATA" | jq -r '.enforcerState // ""')
+            ENFORCER_COMMENT=$(echo "$PR_DATA" | jq -r '.enforcerComment // ""')
+            ENFORCER_PENDING_SINCE=$(echo "$PR_DATA" | jq -r '.enforcerPendingSince // ""')
+
+            echo "  approvedSha:       $APPROVED_SHA"
+            echo "  enforcerState:     $ENFORCER_STATE"
+            echo "  enforcerComment:   $ENFORCER_COMMENT"
+            echo "  enforcerPendingSince: $ENFORCER_PENDING_SINCE"
+
+            # --- Decision logic ---
+
+            # Case 1: enforcer:block → close the PR
+            if [ "$ENFORCER_STATE" = "enforcer:block" ]; then
+              CLOSE_COMMENT="This PR has been blocked by an enforcer and is being automatically closed."
+              if [ -n "$ENFORCER_COMMENT" ]; then
+                CLOSE_COMMENT="$CLOSE_COMMENT Enforcer reason: $ENFORCER_COMMENT"
+              fi
+              echo "  ACTION: Closing PR #$PR_NUMBER (enforcer:block)"
+              gh pr close "$PR_NUMBER" --repo "$REPO" --comment "$CLOSE_COMMENT" || \
+                echo "  WARNING: Failed to close PR #$PR_NUMBER"
+              continue
+            fi
+
+            # Case 2: needs-enforcer-review → skip or close based on timeout
+            if [ "$ENFORCER_STATE" = "needs-enforcer-review" ]; then
+              if [ -n "$ENFORCER_PENDING_SINCE" ]; then
+                # Parse ISO timestamp to epoch seconds
+                PENDING_EPOCH=$(date -d "$ENFORCER_PENDING_SINCE" +%s 2>/dev/null || \
+                  python3 -c "import sys, datetime; s=sys.argv[1].rstrip('Z'); dt=datetime.datetime.fromisoformat(s); print(int(dt.timestamp()))" "$ENFORCER_PENDING_SINCE" 2>/dev/null || echo "0")
+                ELAPSED=$(( NOW - PENDING_EPOCH ))
+                echo "  Enforcer pending for ${ELAPSED}s (threshold: 1800s)"
+
+                if [ "$ELAPSED" -gt 1800 ] && [ "$PENDING_EPOCH" -gt 0 ]; then
+                  echo "  ACTION: Closing PR #$PR_NUMBER (enforcer timeout — deliberating >30 min)"
+                  gh pr close "$PR_NUMBER" --repo "$REPO" \
+                    --comment "This PR is being closed because an enforcer has been deliberating for more than 30 minutes without a decision. The PR can be reopened and re-submitted." || \
+                    echo "  WARNING: Failed to close PR #$PR_NUMBER"
+                else
+                  echo "  ACTION: Skipping PR #$PR_NUMBER (enforcer deliberating, under 30 min — no action)"
+                fi
+              else
+                echo "  ACTION: Skipping PR #$PR_NUMBER (needs-enforcer-review, no pending timestamp — no action)"
+              fi
+              continue
+            fi
+
+            # Case 3: enforcer is null or enforcer:approve — check SHA match
+            if [ -z "$ENFORCER_STATE" ] || [ "$ENFORCER_STATE" = "enforcer:approve" ]; then
+              if [ -z "$APPROVED_SHA" ]; then
+                echo "  ACTION: Skipping PR #$PR_NUMBER (no approvedSha set — not yet approved)"
+                continue
+              fi
+
+              if [ "$APPROVED_SHA" = "$CURRENT_SHA" ]; then
+                echo "  ACTION: Merging PR #$PR_NUMBER (approvedSha matches currentSha, enforcerState: '$ENFORCER_STATE')"
+                MERGE_OUTPUT=$(gh pr merge "$PR_NUMBER" --repo "$REPO" --merge \
+                  --subject "Merge PR #$PR_NUMBER (governance auto-merge)" 2>&1) && MERGE_EXIT=0 || MERGE_EXIT=$?
+
+                echo "  Merge output: $MERGE_OUTPUT"
+
+                if [ $MERGE_EXIT -eq 0 ]; then
+                  echo "  PR #$PR_NUMBER merged successfully — logging event to server"
+                  LOG_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$RAILWAY_SERVER_URL/log-event" \
+                    -H "Content-Type: application/json" \
+                    -d "{\"type\": \"governance\", \"player\": null, \"message\": \"PR #$PR_NUMBER was automatically merged by governance workflow after reaching vote approval threshold (approvedSha: $APPROVED_SHA).\"}" \
+                    || echo "CURL_FAILED")
+                  LOG_CODE=$(echo "$LOG_RESPONSE" | tail -1)
+                  LOG_BODY=$(echo "$LOG_RESPONSE" | head -n -1)
+                  if [ "$LOG_CODE" = "200" ] || [ "$LOG_CODE" = "201" ]; then
+                    echo "  Log event recorded successfully (HTTP $LOG_CODE)"
+                  else
+                    echo "  WARNING: Failed to log merge event (HTTP $LOG_CODE, body: $LOG_BODY) — merge still successful"
+                  fi
+                else
+                  echo "  ERROR: Failed to merge PR #$PR_NUMBER (exit $MERGE_EXIT): $MERGE_OUTPUT"
+                fi
+              else
+                echo "  ACTION: Skipping PR #$PR_NUMBER (SHA mismatch — approvedSha '$APPROVED_SHA' != currentSha '$CURRENT_SHA')"
+              fi
+              continue
+            fi
+
+            # Unknown enforcer state — log and skip
+            echo "  ACTION: Skipping PR #$PR_NUMBER (unknown enforcerState: '$ENFORCER_STATE')"
+          done
+
+          echo ""
+          echo "=== Governance run complete ==="
