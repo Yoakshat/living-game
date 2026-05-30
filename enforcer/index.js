@@ -243,15 +243,14 @@ async function resolveConflict(prNumber, prData) {
       });
     }
 
-    // 2. Check out the PR branch
-    console.log(`[conflict] PR #${prNumber} checking out branch ${branchName}`);
-    try {
-      gitExec(`git checkout -B "${branchName}" "origin/${branchName}"`, tmpDir);
-    } catch {
-      gitExec(`git checkout "${branchName}"`, tmpDir);
-    }
+    // 2. Fetch the PR branch (shallow clone only fetches default branch)
+    gitExec(`git fetch origin ${branchName} --depth=50`, tmpDir);
 
-    // 3. Attempt merge with main
+    // 3. Check out the PR branch
+    console.log(`[conflict] PR #${prNumber} checking out branch ${branchName}`);
+    gitExec(`git checkout -B "${branchName}" "origin/${branchName}"`, tmpDir);
+
+    // 4. Attempt merge with main
     console.log(`[conflict] PR #${prNumber} merging origin/main`);
     try {
       gitExec('git merge origin/main --no-edit', tmpDir);
@@ -263,7 +262,7 @@ async function resolveConflict(prNumber, prData) {
       console.log(`[conflict] PR #${prNumber} merge produced conflicts — proceeding with resolution`);
     }
 
-    // 4. Collect conflicted files
+    // 5. Collect conflicted files
     const conflictedFiles = getConflictedFiles(tmpDir);
     if (conflictedFiles.length === 0) {
       console.log(`[conflict] PR #${prNumber} no conflicted files found — aborting merge and skipping`);
