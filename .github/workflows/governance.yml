@@ -249,6 +249,9 @@ jobs:
                     echo "  Pushed resolved branch $PR_BRANCH — retrying merge"
                     git checkout main
 
+                    # Wait for GitHub to re-evaluate mergeability after the push
+                    sleep 15
+
                     # Retry merge after conflict resolution
                     RETRY_OUTPUT=$(gh pr merge "$PR_NUMBER" --repo "$REPO" --merge \
                       --subject "Merge PR #$PR_NUMBER (governance auto-merge)" 2>&1) && RETRY_EXIT=0 || RETRY_EXIT=$?
