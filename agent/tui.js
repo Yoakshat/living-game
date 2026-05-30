@@ -157,6 +157,52 @@ function removeGhAccount(slug) {
   if (fs.existsSync(p)) fs.unlinkSync(p);
 }
 
+// Returns the GitHub username for a given agent slug.
+// Prefers the stored gh-account.json username; falls back to gh CLI if not set.
+async function resolveAgentGithubUser(slug) {
+  const account = readGhAccount(slug);
+  if (account && account.username) return account.username;
+  // Try gh CLI (uses GH_TOKEN from env if set)
+  return new Promise((resolve) => {
+    execFileCb('gh', ['api', 'user', '--jq', '.login'], { timeout: 8000 }, (_err, stdout) => {
+      const username = (stdout || '').trim();
+      resolve(username || null);
+    });
+  });
+}
+
+// POST the profile for a given slug to the server.
+// Returns true on success, false on failure.
+async function pushAgentProfile(slug) {
+  const user = await resolveAgentGithubUser(slug);
+  if (!user) return false;
+  try {
+    const md = readCharacterMd(slug) || '';
+    const nameMatch = md.match(/^#\s+Character:\s*(.+)/m);
+    const name = nameMatch ? nameMatch[1].trim() : slug;
+    const personalityMatch = md.match(/##\s+Personality\s*\n([\s\S]*?)(?=\n##\s|$)/);
+    const personality = personalityMatch ? personalityMatch[1].trim() : '';
+    const directivesMatch = md.match(/##\s+Directives\s*\n([\s\S]*?)(?=\n##\s|$)/);
+    let directives = [];
+    if (directivesMatch) {
+      directives = directivesMatch[1]
+        .split('\n')
+        .map((l) => l.replace(/^[-*\d.]+\s*/, '').trim())
+        .filter(Boolean);
+    }
+    const body = JSON.stringify({ name, personality, directives });
+    const res = await fetch(`${SERVER_URL}/agent-profile/${encodeURIComponent(user)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+      signal: AbortSignal.timeout(5000),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 // Returns all usernames currently logged in via gh CLI.
 async function listGhAccounts() {
   return new Promise((resolve) => {
@@ -439,7 +485,7 @@ function main() {
 
   const directivesHint = blessed.box({
     parent: configBox,
-    bottom: 0,
+    bottom: 1,
     left: 0,
     width: '100%-2',
     height: 1,
@@ -447,6 +493,34 @@ function main() {
     style: { fg: 'blue' },
     tags: false,
   });
+
+  // Sync status line — shows "Saved & synced" or "Saved locally — sync failed"
+  const syncStatus = blessed.box({
+    parent: configBox,
+    bottom: 0,
+    left: 0,
+    width: '100%-2',
+    height: 1,
+    content: '',
+    tags: true,
+    style: { fg: 'green' },
+  });
+
+  let syncStatusTimer = null;
+  function showSyncStatus(ok) {
+    clearTimeout(syncStatusTimer);
+    syncStatus.tags = true;
+    if (ok) {
+      syncStatus.setContent(' {green-fg}Saved & synced{/green-fg}');
+    } else {
+      syncStatus.setContent(' {yellow-fg}Saved locally — sync failed{/yellow-fg}');
+    }
+    screen.render();
+    syncStatusTimer = setTimeout(() => {
+      syncStatus.setContent('');
+      screen.render();
+    }, 3000);
+  }
 
   // ── right panel — leaderboard ─────────────────────────────────────────────
   const leaderboardBox = blessed.box({
@@ -597,6 +671,7 @@ function main() {
     const agent = agents[selectedIdx];
     currentMd = updateSection(currentMd, 'Personality', currentPersonality);
     writeCharacterMd(agent.slug, currentMd);
+    pushAgentProfile(agent.slug).then((ok) => showSyncStatus(ok)).catch(() => showSyncStatus(false));
   }
 
   function refreshDirectivesList() {
@@ -616,6 +691,7 @@ function main() {
       directivesToMarkdown(directives),
     );
     writeCharacterMd(agent.slug, currentMd);
+    pushAgentProfile(agent.slug).then((ok) => showSyncStatus(ok)).catch(() => showSyncStatus(false));
   }
 
   // ── focus helpers ─────────────────────────────────────────────────────────
@@ -785,6 +861,7 @@ function main() {
       if (!md) return;
       md = md.replace(/^#\s+Character:\s*.+/m, `# Character: ${val}`);
       writeCharacterMd(agent.slug, md);
+      pushAgentProfile(agent.slug).then((ok) => showSyncStatus(ok)).catch(() => showSyncStatus(false));
       agents = scanAgents();
       const newIdx = agents.findIndex((a) => a.slug === agent.slug);
       selectedIdx = newIdx >= 0 ? newIdx : 0;
