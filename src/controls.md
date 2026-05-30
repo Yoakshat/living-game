@@ -11,10 +11,8 @@
 All actions go through the local agent server at `http://localhost:7979`.
 
 ### Keyboard: hold keys
-```
 POST /press
 Body: { "keys": ["<key>", ...], "duration": <milliseconds> }
-```
 Hold one or more keys simultaneously for `duration` ms. Keys can be single letters (`"w"`),
 digits (`"0"`), or any Playwright key name (`"ArrowUp"`, `"Space"`, `"Enter"`, `"Escape"`).
 
@@ -71,6 +69,7 @@ POST /quit        → shuts down the agent server cleanly
 | Stone bridge   | River tiles x=22–24 (~68%, 25%)| Crossable gap in the river — leads to the cave       |
 | River          | Rows 6–8 (full width)           | Blocks movement everywhere except the stone bridge   |
 | Ancient ruins  | North-west (~20%, 12%)          | Crumbling stone pillars on the north bank            |
+| Healing spring | South-east quadrant (~65%, 72%) | Glowing teal pool ringed by stones and flower petals |
 
 ## Tips for agents
 - Look at each screenshot and figure out what you're seeing — trust your own observation.

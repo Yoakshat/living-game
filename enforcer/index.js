@@ -26,7 +26,7 @@ const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const GITHUB_REPO = 'Yoakshat/living-game';
 
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || '60000', 10);
-const MODEL_TIMEOUT_MS = 30_000;
+const MODEL_TIMEOUT_MS = 120_000;
 const MODEL_MAX_RETRIES = 2;
 
 // Validate required env vars at startup
@@ -132,45 +132,23 @@ function gitExec(cmd, cwd, opts = {}) {
 }
 
 function getConflictedFiles(repoDir) {
-  try {
-    const output = gitExec('git diff --name-only --diff-filter=U', repoDir);
-    return output.trim().split('\n').filter(Boolean);
-  } catch {
-    // Fallback: scan for conflict markers in tracked files
-    try {
-      const allFiles = gitExec('git ls-files', repoDir).trim().split('\n').filter(Boolean);
-      return allFiles.filter(f => {
-        try {
-          const content = fs.readFileSync(path.join(repoDir, f), 'utf8');
-          return content.includes('<<<<<<<');
-        } catch { return false; }
-      });
-    } catch { return []; }
-  }
+  const output = gitExec('git diff --name-only --diff-filter=U', repoDir);
+  return output.trim().split('\n').filter(Boolean);
 }
 
-const CONFLICT_SYSTEM_PROMPT = `You are an expert developer resolving a merge conflict in a multiplayer browser game project called "Living Game". The game is a top-down world where Claude Code agents play as characters and propose changes via GitHub PRs.
+const CONFLICT_SYSTEM_PROMPT = `You are resolving a merge conflict in "Living Game" — a top-down multiplayer world where AI agents propose changes via PRs.
 
-Your task is to produce a clean, resolved version of the file with NO conflict markers. Preserve both contributions where possible. If the two changes are fundamentally incompatible (e.g., one deletes an export the other requires), respond with INCOMPATIBLE on the first line followed by a brief explanation.
+You will receive a file with standard git conflict markers (<<<<<<< HEAD, =======, >>>>>>>) and the intent of the PR being merged. Produce the fully resolved file. Always make a judgment call — never refuse. If both sides add something new, keep both. If they modify the same thing differently, pick whichever makes more sense for the game based on the PR description.
 
-Rules:
-- Remove ALL conflict marker lines (<<<<<<< HEAD, =======, >>>>>>> branch-name)
-- Keep the file syntactically valid
-- Preserve whitespace and style of the surrounding code
-- If both changes add new things (functions, items, rules), keep both
-- If the changes modify the same line differently, apply reasonable judgment to merge intent
-- Only respond INCOMPATIBLE if merging would break the game in an unresolvable way
+Output ONLY the resolved file content. No explanation, no markdown fences.`;
 
-Respond with ONLY the resolved file content (or INCOMPATIBLE + explanation). No extra commentary.`;
+async function resolveFileConflict(prTitle, prBody, filePath, conflictContent) {
+  const prompt = `PR being merged: ${prTitle}
+PR description: ${prBody || '(none)'}
 
-async function resolveFileConflict(filePath, conflictContent) {
-  const prompt = `File: ${filePath}
+File: ${filePath}
 
-=== CONFLICTED FILE CONTENT ===
-${conflictContent.slice(0, 50_000)}
-=== END ===
-
-Produce the resolved file content with all conflict markers removed and both contributions merged.`;
+${conflictContent.slice(0, 50_000)}`;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), MODEL_TIMEOUT_MS);
@@ -178,7 +156,7 @@ Produce the resolved file content with all conflict markers removed and both con
     const response = await deepseek.chat.completions.create(
       {
         model: 'deepseek-chat',
-        max_tokens: 4096,
+        max_tokens: 8192,
         messages: [
           { role: 'system', content: CONFLICT_SYSTEM_PROMPT },
           { role: 'user', content: prompt },
@@ -223,35 +201,16 @@ async function resolveConflict(prNumber, prData) {
   console.log(`[conflict] PR #${prNumber} — starting conflict resolution (branch=${branchName}, sha=${headSha.slice(0, 7)})`);
 
   try {
-    // 1. Clone or reset the temp repo
-    if (fs.existsSync(tmpDir)) {
-      console.log(`[conflict] PR #${prNumber} reusing existing temp dir ${tmpDir}`);
-      try {
-        gitExec('git fetch origin', tmpDir);
-      } catch (err) {
-        console.log(`[conflict] PR #${prNumber} fetch failed, re-cloning: ${err.message}`);
-        fs.rmSync(tmpDir, { recursive: true, force: true });
-      }
-    }
+    // 1. Clone directly onto the PR branch (needs full history for 3-way merge)
+    if (fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true, force: true });
+    console.log(`[conflict] PR #${prNumber} cloning branch ${branchName}`);
+    execSync(`git clone --branch "${branchName}" "${repoUrl}" "${tmpDir}"`, {
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
 
-    if (!fs.existsSync(tmpDir)) {
-      console.log(`[conflict] PR #${prNumber} cloning repo to ${tmpDir}`);
-      execSync(`git clone --depth=50 "${repoUrl}" "${tmpDir}"`, {
-        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
-        encoding: 'utf8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-    }
-
-    // 2. Check out the PR branch
-    console.log(`[conflict] PR #${prNumber} checking out branch ${branchName}`);
-    try {
-      gitExec(`git checkout -B "${branchName}" "origin/${branchName}"`, tmpDir);
-    } catch {
-      gitExec(`git checkout "${branchName}"`, tmpDir);
-    }
-
-    // 3. Attempt merge with main
+    // 2. Attempt merge with main
     console.log(`[conflict] PR #${prNumber} merging origin/main`);
     try {
       gitExec('git merge origin/main --no-edit', tmpDir);
@@ -263,77 +222,49 @@ async function resolveConflict(prNumber, prData) {
       console.log(`[conflict] PR #${prNumber} merge produced conflicts — proceeding with resolution`);
     }
 
-    // 4. Collect conflicted files
+    // 3. Collect conflicted files
     const conflictedFiles = getConflictedFiles(tmpDir);
     if (conflictedFiles.length === 0) {
       console.log(`[conflict] PR #${prNumber} no conflicted files found — aborting merge and skipping`);
       try { gitExec('git merge --abort', tmpDir); } catch {}
-      return; // finally block handles cleanup
+      return;
     }
     console.log(`[conflict] PR #${prNumber} conflicted files: ${conflictedFiles.join(', ')}`);
 
-    // 5. Resolve each file via DeepSeek
+    // 4. Resolve each file via DeepSeek (one call per file, with PR intent)
+    const prTitle = prData.title || `PR #${prNumber}`;
+    const prBody = prData.body || '';
     const resolvedFileSummaries = [];
-    const incompatibleFiles = [];
 
     for (const relFile of conflictedFiles) {
       const absFile = path.join(tmpDir, relFile);
-      let conflictContent;
-      try {
-        conflictContent = fs.readFileSync(absFile, 'utf8');
-      } catch (err) {
-        console.error(`[conflict] PR #${prNumber} could not read ${relFile}: ${err.message}`);
-        incompatibleFiles.push({ file: relFile, reason: `Could not read file: ${err.message}` });
-        continue;
-      }
+      const conflictContent = fs.readFileSync(absFile, 'utf8');
+      console.log(`[conflict] PR #${prNumber} resolving ${relFile} via DeepSeek`);
 
-      console.log(`[conflict] PR #${prNumber} sending ${relFile} (${conflictContent.length} chars) to DeepSeek`);
       let resolved;
       try {
-        resolved = await callModelFn(() => resolveFileConflict(relFile, conflictContent));
+        resolved = await callModelFn(() => resolveFileConflict(prTitle, prBody, relFile, conflictContent));
       } catch (err) {
         console.error(`[conflict] PR #${prNumber} DeepSeek failed for ${relFile}: ${err.message}`);
-        incompatibleFiles.push({ file: relFile, reason: `Model call failed: ${err.message}` });
-        continue;
+        try { gitExec('git merge --abort', tmpDir); } catch {}
+        return;
       }
 
-      if (resolved.trimStart().startsWith('INCOMPATIBLE')) {
-        const explanation = resolved.replace(/^INCOMPATIBLE[^\n]*/m, '').trim() || 'Fundamental incompatibility detected.';
-        console.log(`[conflict] PR #${prNumber} ${relFile} is INCOMPATIBLE: ${explanation}`);
-        incompatibleFiles.push({ file: relFile, reason: explanation });
-        continue;
+      // Strip markdown fences if model wrapped output
+      resolved = resolved.replace(/^```[a-z]*\n?/m, '').replace(/\n?```\s*$/m, '');
+
+      if (!resolved.trim()) {
+        console.error(`[conflict] PR #${prNumber} empty response for ${relFile} — aborting`);
+        try { gitExec('git merge --abort', tmpDir); } catch {}
+        return;
       }
 
-      // Strip markdown code fences if the model wrapped the output
-      const cleanResolved = resolved.replace(/^```[a-z]*\n?/m, '').replace(/\n?```$/m, '');
-
-      // Write resolved content
-      try {
-        fs.writeFileSync(absFile, cleanResolved, 'utf8');
-        resolvedFileSummaries.push(relFile);
-        console.log(`[conflict] PR #${prNumber} ${relFile} resolved`);
-      } catch (err) {
-        console.error(`[conflict] PR #${prNumber} could not write ${relFile}: ${err.message}`);
-        incompatibleFiles.push({ file: relFile, reason: `Could not write resolved file: ${err.message}` });
-      }
+      fs.writeFileSync(absFile, resolved, 'utf8');
+      resolvedFileSummaries.push(relFile);
+      console.log(`[conflict] PR #${prNumber} ${relFile} resolved`);
     }
 
-    // 6. Handle incompatible files
-    if (incompatibleFiles.length > 0) {
-      console.log(`[conflict] PR #${prNumber} has ${incompatibleFiles.length} incompatible file(s) — closing PR`);
-      try { gitExec('git merge --abort', tmpDir); } catch {}
-
-      const reasons = incompatibleFiles.map(f => `- **${f.file}**: ${f.reason}`).join('\n');
-      await closePR(prNumber,
-        `**Enforcer: conflict auto-resolution failed — incompatible changes detected**\n\n` +
-        `The enforcer attempted to automatically resolve merge conflicts with \`main\` but found fundamentally incompatible changes:\n\n${reasons}\n\n` +
-        `Please manually resolve the conflict, verify game functionality, and open a new PR.`
-      );
-      resolvedConflicts.delete(prNumber);
-      return; // finally block handles cleanup
-    }
-
-    // 7. Stage, commit, push
+    // 5. Stage and commit
     console.log(`[conflict] PR #${prNumber} staging resolved files`);
     gitExec('git add -A', tmpDir);
 
@@ -364,7 +295,6 @@ async function resolveConflict(prNumber, prData) {
 
   } catch (err) {
     console.error(`[conflict] PR #${prNumber} resolution failed: ${err.message}`);
-    try { gitExec('git merge --abort', tmpDir); } catch {}
     // Leave PR open — don't close on unexpected errors, just log and move on
   } finally {
     // Clean up temp dir
