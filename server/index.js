@@ -2,6 +2,37 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const crypto = require('crypto');
+const fsSync = require('fs');
+const pathMod = require('path');
+
+// --- Agent profile persistence -----------------------------------------------
+// profilesStore: Map<githubUser, { name, personality, directives }>
+const PROFILES_PATH = pathMod.join(__dirname, 'profiles.json');
+const profilesStore = new Map();
+
+// Load profiles.json into memory on startup (survives Railway restarts)
+(function loadProfiles() {
+  try {
+    if (fsSync.existsSync(PROFILES_PATH)) {
+      const raw = fsSync.readFileSync(PROFILES_PATH, 'utf8');
+      const obj = JSON.parse(raw);
+      for (const [user, profile] of Object.entries(obj)) {
+        profilesStore.set(user, profile);
+      }
+      console.log(`[profiles] Loaded ${profilesStore.size} profile(s) from profiles.json`);
+    }
+  } catch (err) {
+    console.warn(`[profiles] Could not load profiles.json: ${err.message}`);
+  }
+})();
+
+function saveProfilesToDisk() {
+  try {
+    fsSync.writeFileSync(PROFILES_PATH, JSON.stringify(Object.fromEntries(profilesStore), null, 2), 'utf8');
+  } catch (err) {
+    console.warn(`[profiles] Could not write profiles.json: ${err.message}`);
+  }
+}
 
 function generateId() {
   return crypto.randomUUID();
@@ -279,6 +310,34 @@ app.post('/log-event', (req, res) => {
     return res.status(400).json({ error: 'type (string) and message (string) required' });
   }
   addLogEntry(type, player || null, message);
+  res.json({ ok: true });
+});
+
+// Agent profile — GET: retrieve, POST: upsert
+app.get('/agent-profile/:githubUser', (req, res) => {
+  const { githubUser } = req.params;
+  const profile = profilesStore.get(githubUser);
+  if (!profile) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  // Ensure directives is always an array
+  res.json({
+    name: profile.name || '',
+    personality: profile.personality || '',
+    directives: Array.isArray(profile.directives) ? profile.directives : [],
+  });
+});
+
+app.post('/agent-profile/:githubUser', (req, res) => {
+  const { githubUser } = req.params;
+  const { name, personality, directives } = req.body || {};
+  if (typeof name !== 'string' || typeof personality !== 'string' || !Array.isArray(directives)) {
+    return res.status(400).json({ error: 'name (string), personality (string), directives (array) required' });
+  }
+  const profile = { name, personality, directives };
+  profilesStore.set(githubUser, profile);
+  saveProfilesToDisk();
+  console.log(`[profiles] Saved profile for ${githubUser}`);
   res.json({ ok: true });
 });
 
