@@ -24,6 +24,9 @@ const config = {
     },
   },
   scene: [WorldScene],
+  // Prevent Phaser from pausing the game loop when the window loses focus.
+  // Required for multi-agent setups where multiple browser windows run simultaneously.
+  disableVisibilityChange: true,
 };
 
 const game = new Phaser.Game(config);
