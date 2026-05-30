@@ -136,38 +136,19 @@ function getConflictedFiles(repoDir) {
   return output.trim().split('\n').filter(Boolean);
 }
 
-const CONFLICT_SYSTEM_PROMPT = `You are a developer merging a pull request into a game codebase called "Living Game" — a top-down multiplayer world where Claude Code agents play as characters and propose changes via PRs.
+const CONFLICT_SYSTEM_PROMPT = `You are resolving a merge conflict in "Living Game" — a top-down multiplayer world where AI agents propose changes via PRs.
 
-You will be given:
-- The PR's title and description (its intent)
-- One or more files with standard git conflict markers (<<<<<<< HEAD, =======, >>>>>>>)
+You will receive a file with standard git conflict markers (<<<<<<< HEAD, =======, >>>>>>>) and the intent of the PR being merged. Produce the fully resolved file. Always make a judgment call — never refuse. If both sides add something new, keep both. If they modify the same thing differently, pick whichever makes more sense for the game based on the PR description.
 
-Your job: resolve every conflict in every file, keeping the intent of the PR while incorporating what main added. If both sides add new things (new functions, new world objects), keep both. If they modify the same thing differently, use the PR description to decide which makes more sense.
+Output ONLY the resolved file content. No explanation, no markdown fences.`;
 
-Respond with ONLY this format — one block per file, nothing else:
-
-=== RESOLVED: path/to/file ===
-<full resolved file content>
-=== END ===
-
-If a conflict is fundamentally incompatible (one side deletes something the other requires), output:
-
-=== INCOMPATIBLE: path/to/file ===
-<one sentence explaining why>
-=== END ===`;
-
-async function resolveAllConflicts(prTitle, prBody, conflictedFiles, repoDir) {
-  const filesSection = conflictedFiles.map(f => {
-    const content = fs.readFileSync(path.join(repoDir, f), 'utf8');
-    return `=== FILE: ${f} ===\n${content.slice(0, 40_000)}\n=== END FILE ===`;
-  }).join('\n\n');
-
-  const prompt = `PR title: ${prTitle}
+async function resolveFileConflict(prTitle, prBody, filePath, conflictContent) {
+  const prompt = `PR being merged: ${prTitle}
 PR description: ${prBody || '(none)'}
 
-Resolve the conflicts in the following files:
+File: ${filePath}
 
-${filesSection}`;
+${conflictContent.slice(0, 50_000)}`;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), MODEL_TIMEOUT_MS);
@@ -187,20 +168,6 @@ ${filesSection}`;
   } finally {
     clearTimeout(timer);
   }
-}
-
-function parseResolvedFiles(modelOutput) {
-  const resolved = {};
-  const incompatible = {};
-  const resolvedRe = /^=== RESOLVED: (.+?) ===\n([\s\S]*?)\n=== END ===/gm;
-  const incompatibleRe = /^=== INCOMPATIBLE: (.+?) ===\n([\s\S]*?)\n=== END ===/gm;
-  for (const match of modelOutput.matchAll(resolvedRe)) {
-    resolved[match[1].trim()] = match[2];
-  }
-  for (const match of modelOutput.matchAll(incompatibleRe)) {
-    incompatible[match[1].trim()] = match[2].trim();
-  }
-  return { resolved, incompatible };
 }
 
 // Generic retry wrapper that accepts an async function (instead of a prompt string)
@@ -264,48 +231,40 @@ async function resolveConflict(prNumber, prData) {
     }
     console.log(`[conflict] PR #${prNumber} conflicted files: ${conflictedFiles.join(', ')}`);
 
-    // 4. One DeepSeek call with all conflicted files + PR intent
+    // 4. Resolve each file via DeepSeek (one call per file, with PR intent)
     const prTitle = prData.title || `PR #${prNumber}`;
     const prBody = prData.body || '';
-    console.log(`[conflict] PR #${prNumber} sending ${conflictedFiles.length} file(s) to DeepSeek`);
-
-    let modelOutput;
-    try {
-      modelOutput = await callModelFn(() => resolveAllConflicts(prTitle, prBody, conflictedFiles, tmpDir));
-    } catch (err) {
-      console.error(`[conflict] PR #${prNumber} DeepSeek call failed: ${err.message}`);
-      try { gitExec('git merge --abort', tmpDir); } catch {}
-      return;
-    }
-
-    const { resolved, incompatible } = parseResolvedFiles(modelOutput);
-
-    // 5. Handle incompatible files
-    const incompatibleList = Object.entries(incompatible);
-    const unresolved = conflictedFiles.filter(f => !resolved[f] && !incompatible[f]);
-
-    if (incompatibleList.length > 0 || unresolved.length > 0) {
-      try { gitExec('git merge --abort', tmpDir); } catch {}
-      const reasons = [
-        ...incompatibleList.map(([f, r]) => `- **${f}**: ${r}`),
-        ...unresolved.map(f => `- **${f}**: not included in model response`),
-      ].join('\n');
-      await closePR(prNumber,
-        `**Enforcer: conflict auto-resolution failed**\n\n${reasons}\n\nPlease resolve manually and open a new PR.`
-      );
-      resolvedConflicts.delete(prNumber);
-      return;
-    }
-
-    // 6. Write resolved files
     const resolvedFileSummaries = [];
-    for (const [relFile, content] of Object.entries(resolved)) {
-      fs.writeFileSync(path.join(tmpDir, relFile), content, 'utf8');
+
+    for (const relFile of conflictedFiles) {
+      const absFile = path.join(tmpDir, relFile);
+      const conflictContent = fs.readFileSync(absFile, 'utf8');
+      console.log(`[conflict] PR #${prNumber} resolving ${relFile} via DeepSeek`);
+
+      let resolved;
+      try {
+        resolved = await callModelFn(() => resolveFileConflict(prTitle, prBody, relFile, conflictContent));
+      } catch (err) {
+        console.error(`[conflict] PR #${prNumber} DeepSeek failed for ${relFile}: ${err.message}`);
+        try { gitExec('git merge --abort', tmpDir); } catch {}
+        return;
+      }
+
+      // Strip markdown fences if model wrapped output
+      resolved = resolved.replace(/^```[a-z]*\n?/m, '').replace(/\n?```\s*$/m, '');
+
+      if (!resolved.trim()) {
+        console.error(`[conflict] PR #${prNumber} empty response for ${relFile} — aborting`);
+        try { gitExec('git merge --abort', tmpDir); } catch {}
+        return;
+      }
+
+      fs.writeFileSync(absFile, resolved, 'utf8');
       resolvedFileSummaries.push(relFile);
       console.log(`[conflict] PR #${prNumber} ${relFile} resolved`);
     }
 
-    // 7. Stage and commit (merge is already in progress — just add resolved files)
+    // 5. Stage and commit
     console.log(`[conflict] PR #${prNumber} staging resolved files`);
     gitExec('git add -A', tmpDir);
 
