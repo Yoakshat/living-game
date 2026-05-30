@@ -14,7 +14,10 @@ import { createRequire } from 'module';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { spawn } from 'child_process';
+import { spawn, execFile as execFileCb } from 'child_process';
+import { promisify } from 'util';
+
+const execFile = promisify(execFileCb);
 
 const require = createRequire(import.meta.url);
 const blessed = require('blessed');
@@ -132,6 +135,96 @@ function parseDirectives(md) {
 
 function directivesToMarkdown(list) {
   return list.map((d) => `- ${d}`).join('\n');
+}
+
+// ── GitHub account helpers ───────────────────────────────────────────────────
+function ghAccountPath(slug) {
+  return path.join(agentDir(slug), 'gh-account.json');
+}
+
+function readGhAccount(slug) {
+  const p = ghAccountPath(slug);
+  if (!fs.existsSync(p)) return null;
+  try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; }
+}
+
+function writeGhAccount(slug, data) {
+  fs.writeFileSync(ghAccountPath(slug), JSON.stringify(data), 'utf8');
+}
+
+function removeGhAccount(slug) {
+  const p = ghAccountPath(slug);
+  if (fs.existsSync(p)) fs.unlinkSync(p);
+}
+
+// Returns the GitHub username for a given agent slug.
+// Prefers the stored gh-account.json username; falls back to gh CLI if not set.
+async function resolveAgentGithubUser(slug) {
+  const account = readGhAccount(slug);
+  if (account && account.username) return account.username;
+  // Try gh CLI (uses GH_TOKEN from env if set)
+  return new Promise((resolve) => {
+    execFileCb('gh', ['api', 'user', '--jq', '.login'], { timeout: 8000 }, (_err, stdout) => {
+      const username = (stdout || '').trim();
+      resolve(username || null);
+    });
+  });
+}
+
+// POST the profile for a given slug to the server.
+// Returns true on success, false on failure.
+async function pushAgentProfile(slug) {
+  const user = await resolveAgentGithubUser(slug);
+  if (!user) return false;
+  try {
+    const md = readCharacterMd(slug) || '';
+    const name = parseName(md) || slug;
+    const personality = parseSection(md, 'Personality') || '';
+    const directives = parseDirectives(md);
+    const res = await fetch(`${SERVER_URL}/agent-profile/${encodeURIComponent(user)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, personality, directives }),
+      signal: AbortSignal.timeout(5000),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+// Returns all usernames currently logged in via gh CLI.
+async function listGhAccounts() {
+  return new Promise((resolve) => {
+    execFileCb('gh', ['auth', 'status'], (_err, stdout, stderr) => {
+      const combined = (stdout || '') + (stderr || '');
+      const matches = [...combined.matchAll(/account\s+(\S+)/g)];
+      resolve([...new Set(matches.map((m) => m[1]))]);
+    });
+  });
+}
+
+// Gets the stored token for a gh CLI account.
+async function getGhToken(username) {
+  try {
+    const { stdout } = await execFile('gh', ['auth', 'token', '--user', username], { timeout: 8000 });
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+// Verifies a PAT token and returns the GitHub username it belongs to.
+async function verifyPat(token) {
+  try {
+    const { stdout } = await execFile(
+      'gh', ['api', 'user', '--jq', '.login'],
+      { timeout: 8000, env: { ...process.env, GH_TOKEN: token } },
+    );
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
 }
 
 // ── PID helpers ──────────────────────────────────────────────────────────────
@@ -382,7 +475,7 @@ function main() {
 
   const directivesHint = blessed.box({
     parent: configBox,
-    bottom: 0,
+    bottom: 1,
     left: 0,
     width: '100%-2',
     height: 1,
@@ -390,6 +483,33 @@ function main() {
     style: { fg: 'blue' },
     tags: false,
   });
+
+  // Sync status line — shows "Saved & synced" or "Saved locally — sync failed"
+  const syncStatus = blessed.box({
+    parent: configBox,
+    bottom: 0,
+    left: 0,
+    width: '100%-2',
+    height: 1,
+    content: '',
+    tags: true,
+    style: { fg: 'green' },
+  });
+
+  let syncStatusTimer = null;
+  function showSyncStatus(ok) {
+    clearTimeout(syncStatusTimer);
+    if (ok) {
+      syncStatus.setContent(' {green-fg}Saved & synced{/green-fg}');
+    } else {
+      syncStatus.setContent(' {yellow-fg}Saved locally — sync failed{/yellow-fg}');
+    }
+    screen.render();
+    syncStatusTimer = setTimeout(() => {
+      syncStatus.setContent('');
+      screen.render();
+    }, 3000);
+  }
 
   // ── right panel — leaderboard ─────────────────────────────────────────────
   const leaderboardBox = blessed.box({
@@ -415,7 +535,7 @@ function main() {
     width: '100%',
     height: 3,
     content:
-      ' {bold}[s]{/bold} start  {bold}[x]{/bold} stop  {bold}[n]{/bold} new  {bold}[del]{/bold} delete  {bold}[Tab]{/bold} switch panel  {bold}[r]{/bold} refresh lb  {bold}[q]{/bold} quit',
+      ' {bold}[s]{/bold} start  {bold}[x]{/bold} stop  {bold}[n]{/bold} new  {bold}[del]{/bold} delete  {bold}[Tab]{/bold} switch panel  {bold}[g]{/bold} github  {bold}[r]{/bold} refresh lb  {bold}[q]{/bold} quit',
     tags: true,
     border: { type: 'line' },
     style: { border: { fg: 'gray' }, fg: 'white' },
@@ -487,7 +607,13 @@ function main() {
     const statusStr = agent.running
       ? '{green-fg}● Running{/green-fg}'
       : '{gray-fg}○ Stopped{/gray-fg}';
-    agentNameBox.setContent(` {bold}${agent.name}{/bold}   ${statusStr}`);
+    const ghAccount = readGhAccount(agent.slug);
+    const ghStr = ghAccount
+      ? `{blue-fg}@${ghAccount.username}{/blue-fg}`
+      : '{gray-fg}none{/gray-fg}';
+    agentNameBox.setContent(
+      ` {bold}${agent.name}{/bold}   ${statusStr}\n GitHub: ${ghStr}  {gray-fg}[g] switch{/gray-fg}`,
+    );
 
     refreshPresetList();
     refreshDirectivesList();
@@ -534,6 +660,7 @@ function main() {
     const agent = agents[selectedIdx];
     currentMd = updateSection(currentMd, 'Personality', currentPersonality);
     writeCharacterMd(agent.slug, currentMd);
+    pushAgentProfile(agent.slug).then((ok) => showSyncStatus(ok)).catch(() => showSyncStatus(false));
   }
 
   function refreshDirectivesList() {
@@ -553,6 +680,7 @@ function main() {
       directivesToMarkdown(directives),
     );
     writeCharacterMd(agent.slug, currentMd);
+    pushAgentProfile(agent.slug).then((ok) => showSyncStatus(ok)).catch(() => showSyncStatus(false));
   }
 
   // ── focus helpers ─────────────────────────────────────────────────────────
@@ -668,10 +796,15 @@ function main() {
 
     const dir = agentDir(slug);
     const startScript = path.join(__dirname, 'start.sh');
+    const ghAccount = readGhAccount(slug);
+    const spawnEnv = { ...process.env };
+    if (ghAccount?.token) spawnEnv.GH_TOKEN = ghAccount.token;
+
     const child = spawn('bash', [startScript], {
       cwd: dir,
       detached: true,  // makes bash a session leader so we can kill the group
       stdio: 'ignore',
+      env: spawnEnv,
     });
     child.unref();
     writePid(slug, child.pid);
@@ -683,16 +816,24 @@ function main() {
   }
 
   function stopAgent(slug) {
+    // Kill the bash loop + its process group (claude, etc.)
     const pid = readPid(slug);
-    if (pid === null) return;
-    try {
-      // Kill the entire process group (negative PID) so the bash wrapper
-      // and any running claude child both get the signal
-      process.kill(-pid, 'SIGTERM');
-    } catch {
-      // Already dead — that's fine
+    if (pid !== null) {
+      try { process.kill(-pid, 'SIGTERM'); } catch { /* already dead */ }
+      deletePid(slug);
     }
-    deletePid(slug);
+
+    // Also kill whatever node server.js is holding this agent's port,
+    // even if it was started outside the TUI (orphan from a previous session).
+    const port = readPort(slug);
+    if (port !== null) {
+      execFileCb('lsof', ['-ti', `:${port}`], (_err, stdout) => {
+        if (!stdout) return;
+        stdout.trim().split('\n').filter(Boolean).forEach((serverPid) => {
+          try { process.kill(parseInt(serverPid, 10), 'SIGTERM'); } catch { /* gone */ }
+        });
+      });
+    }
 
     const agentEntry = agents.find((a) => a.slug === slug);
     if (agentEntry) agentEntry.running = false;
@@ -709,12 +850,101 @@ function main() {
       if (!md) return;
       md = md.replace(/^#\s+Character:\s*.+/m, `# Character: ${val}`);
       writeCharacterMd(agent.slug, md);
+      pushAgentProfile(agent.slug).then((ok) => showSyncStatus(ok)).catch(() => showSyncStatus(false));
       agents = scanAgents();
       const newIdx = agents.findIndex((a) => a.slug === agent.slug);
       selectedIdx = newIdx >= 0 ? newIdx : 0;
       refreshRoster();
       loadSelectedAgent();
     });
+  }
+
+  // ── GitHub account picker ─────────────────────────────────────────────────
+  async function showGhAccountPicker() {
+    if (agents.length === 0) return;
+    const agent = agents[selectedIdx];
+
+    // Fetch logged-in accounts while showing a loading indicator
+    agentNameBox.setContent(
+      agentNameBox.getContent().replace(/\n.*/, '\n {yellow-fg}Loading accounts…{/yellow-fg}'),
+    );
+    screen.render();
+
+    const accounts = await listGhAccounts();
+
+    const items = [
+      ...accounts.map((u) => `  ${u}`),
+      '  + Add via PAT token',
+      '  - Remove account',
+    ];
+
+    const pickerHeight = Math.min(items.length + 4, 16);
+    const modal = blessed.box({
+      parent: screen,
+      top: 'center',
+      left: 'center',
+      width: 52,
+      height: pickerHeight,
+      border: { type: 'line' },
+      label: ' {bold}GitHub Account{/bold} ',
+      tags: true,
+      style: { border: { fg: 'blue' }, label: { fg: 'blue' } },
+    });
+
+    const pickerList = blessed.list({
+      parent: modal,
+      top: 0,
+      left: 0,
+      width: '100%-2',
+      height: '100%-2',
+      keys: true,
+      vi: false,
+      items,
+      style: {
+        selected: { bg: 'blue', fg: 'white', bold: true },
+        item: { fg: 'white' },
+      },
+    });
+
+    const closeModal = () => {
+      modal.destroy();
+      loadSelectedAgent();
+      screen.render();
+    };
+
+    pickerList.on('select', async (_item, index) => {
+      if (index < accounts.length) {
+        // Known gh CLI account — fetch its stored token
+        const username = accounts[index];
+        modal.destroy();
+        screen.render();
+        const token = await getGhToken(username);
+        if (token) {
+          writeGhAccount(agent.slug, { username, token });
+        }
+        loadSelectedAgent();
+      } else if (index === accounts.length) {
+        // Add via PAT
+        modal.destroy();
+        screen.render();
+        prompt('Paste GitHub PAT token', '', async (val) => {
+          if (!val) { loadSelectedAgent(); return; }
+          const username = await verifyPat(val);
+          if (username) {
+            writeGhAccount(agent.slug, { username, token: val });
+          }
+          loadSelectedAgent();
+        });
+      } else {
+        // Remove
+        removeGhAccount(agent.slug);
+        closeModal();
+      }
+    });
+
+    pickerList.key(['escape', 'q'], closeModal);
+    pickerList.focus();
+    screen.render();
   }
 
   // ── key bindings — global ─────────────────────────────────────────────────
@@ -729,6 +959,7 @@ function main() {
   });
 
   screen.key(['r'], () => refreshLeaderboard());
+  screen.key(['g'], () => showGhAccountPicker());
 
   screen.key(['s'], () => {
     if (agents.length === 0) return;

@@ -616,39 +616,60 @@ function makeBridgeTexture(scene, key) {
   g.destroy();
 }
 
-// Generate everything; returns metadata the scene needs for sizing/bodies.
-export function generateTextures(scene) {
-  const grassVariants = 4;
-  for (let i = 0; i < grassVariants; i++) {
-    makeGrassTexture(scene, 'grass-' + i, 1337 + i * 911);
+// --- Healing spring --------------------------------------------------------
+// A glowing pool of restorative water ringed by smooth stones and flower petals.
+// Purely decorative — no collision. Signals safety and rest to passing travelers.
+const SPRING_W = 64;
+const SPRING_H = 64;
+
+function makeHealingSpringTexture(scene, key) {
+  const g = scene.make.graphics({ x: 0, y: 0, add: false });
+  const cx = SPRING_W / 2;
+  const cy = SPRING_H / 2 + 4;
+
+  // Ground shadow.
+  g.fillStyle(0x000000, 0.18);
+  g.fillEllipse(cx, cy + 12, 54, 14);
+
+  // Outer ring of smooth mossy stones.
+  const ringStones = [0, 40, 80, 120, 160, 200, 240, 280, 320];
+  for (const deg of ringStones) {
+    const rad = (deg * Math.PI) / 180;
+    const sx = cx + Math.cos(rad) * 22;
+    const sy = cy + Math.sin(rad) * 16;
+    g.fillStyle(0x7a8c6e, 1);
+    g.fillEllipse(sx, sy, 10, 8);
+    g.fillStyle(0x9aac8e, 0.7);
+    g.fillEllipse(sx - 1, sy - 1, 5, 4);
   }
-  const tree = makeTreeTexture(scene, 'tree');
-  const rock = makeRockTexture(scene, 'rock');
-  const player = makePlayerTextures(scene);
-  const campfire = makeCampfireTexture(scene, 'campfire');
 
-  // New world landmarks.
-  const waterVariants = 3;
-  for (let i = 0; i < waterVariants; i++) {
-    makeWaterTexture(scene, 'water-' + i, 9999 + i * 1337);
-  }
-  const cave = makeCaveTexture(scene, 'cave');
-  const well = makeWellTexture(scene, 'well');
-  const forge = makeForgeTexture(scene, 'forge');
+  // Pool base — deep teal-blue water.
+  g.fillStyle(0x0d6b5e, 1);
+  g.fillEllipse(cx, cy, 36, 28);
 
-  // Stone bridge tile (used for the cave river crossing).
-  makeBridgeTexture(scene, 'bridge');
+  // Inner glow — lighter, gives the "healing" feel.
+  g.fillStyle(0x18a88e, 0.8);
+  g.fillEllipse(cx, cy - 2, 26, 20);
 
-  return {
-    tile: TILE,
-    grassVariants,
-    waterVariants,
-    tree,
-    rock,
-    player,
-    campfire,
-    cave,
-    well,
-    forge,
-  };
-}
+  // Bright core shimmer.
+  g.fillStyle(0x5eded0, 0.7);
+  g.fillEllipse(cx - 3, cy - 4, 14, 10);
+
+  // Specular highlight spot.
+  g.fillStyle(0xafffee, 0.55);
+  g.fillEllipse(cx - 5, cy - 6, 6, 4);
+
+  // Ripple rings on the surface.
+  g.lineStyle(1, 0x18a88e, 0.5);
+  g.strokeEllipse(cx, cy, 28, 22);
+  g.lineStyle(1, 0x5eded0, 0.3);
+  g.strokeEllipse(cx, cy, 20, 15);
+
+  // Small flower petals around the rim (pink, 5 petals).
+  const petalColors = [0xff88aa, 0xffaacc, 0xff99bb, 0xffbbdd, 0xff77aa];
+  const petalAngles = [15, 87, 159, 231, 303];
+  for (let i = 0; i < petalAngles.length; i++) {
+    const rad = (petalAngles[i] * Math.PI) / 180;
+    const px = cx + Math.cos(rad) * 19;
+    const py = cy + Math.sin(rad) * 14;
+   
