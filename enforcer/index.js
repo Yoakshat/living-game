@@ -223,35 +223,18 @@ async function resolveConflict(prNumber, prData) {
   console.log(`[conflict] PR #${prNumber} — starting conflict resolution (branch=${branchName}, sha=${headSha.slice(0, 7)})`);
 
   try {
-    // 1. Clone or reset the temp repo
-    if (fs.existsSync(tmpDir)) {
-      console.log(`[conflict] PR #${prNumber} reusing existing temp dir ${tmpDir}`);
-      try {
-        gitExec('git fetch origin', tmpDir);
-      } catch (err) {
-        console.log(`[conflict] PR #${prNumber} fetch failed, re-cloning: ${err.message}`);
-        fs.rmSync(tmpDir, { recursive: true, force: true });
-      }
-    }
+    // 1. Shallow-clone directly onto the PR branch (no history needed)
+    if (fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true, force: true });
+    console.log(`[conflict] PR #${prNumber} cloning branch ${branchName} (depth=1)`);
+    execSync(`git clone --depth=1 --branch "${branchName}" "${repoUrl}" "${tmpDir}"`, {
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    // Fetch main tip so we can merge it
+    gitExec('git fetch origin main --depth=1', tmpDir);
 
-    if (!fs.existsSync(tmpDir)) {
-      console.log(`[conflict] PR #${prNumber} cloning repo to ${tmpDir}`);
-      execSync(`git clone --depth=50 "${repoUrl}" "${tmpDir}"`, {
-        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
-        encoding: 'utf8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-    }
-
-    // 2. Fetch the PR branch (shallow clone only fetches default branch)
-    // fetch stores the commit in FETCH_HEAD — use that for checkout, not origin/<branch>
-    gitExec(`git fetch origin ${branchName} --depth=50`, tmpDir);
-
-    // 3. Check out the PR branch
-    console.log(`[conflict] PR #${prNumber} checking out branch ${branchName}`);
-    gitExec(`git checkout -B "${branchName}" FETCH_HEAD`, tmpDir);
-
-    // 4. Attempt merge with main
+    // 2. Attempt merge with main
     console.log(`[conflict] PR #${prNumber} merging origin/main`);
     try {
       gitExec('git merge origin/main --no-edit', tmpDir);
