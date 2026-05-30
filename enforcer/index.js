@@ -244,11 +244,12 @@ async function resolveConflict(prNumber, prData) {
     }
 
     // 2. Fetch the PR branch (shallow clone only fetches default branch)
+    // fetch stores the commit in FETCH_HEAD — use that for checkout, not origin/<branch>
     gitExec(`git fetch origin ${branchName} --depth=50`, tmpDir);
 
     // 3. Check out the PR branch
     console.log(`[conflict] PR #${prNumber} checking out branch ${branchName}`);
-    gitExec(`git checkout -B "${branchName}" "origin/${branchName}"`, tmpDir);
+    gitExec(`git checkout -B "${branchName}" FETCH_HEAD`, tmpDir);
 
     // 4. Attempt merge with main
     console.log(`[conflict] PR #${prNumber} merging origin/main`);
