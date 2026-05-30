@@ -112,6 +112,15 @@ export default class WorldScene extends Phaser.Scene {
       .setOrigin(0.5, 0.5)
       .setDepth(wellY + meta.well.h / 2);
 
+    // --- Healing spring (south-east quadrant) --------------------------------
+    // A peaceful glowing pool — no collision. A place of rest for weary travelers.
+    const springX = Math.round(this.worldW * 0.65);
+    const springY = Math.round(this.worldH * 0.72);
+    this.add
+      .image(springX, springY, 'healing-spring')
+      .setOrigin(0.5, 0.5)
+      .setDepth(springY + meta.healingSpring.h / 2);
+
     // --- Player -------------------------------------------------------------
     const spawn = this.findClearSpawn(placements, T);
     this.player = this.physics.add.sprite(spawn.x, spawn.y, 'player-down');
