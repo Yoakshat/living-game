@@ -15,9 +15,15 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       RAILWAY_SERVER_URL: ${{ secrets.RAILWAY_SERVER_URL }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       REPO: Yoakshat/living-game
 
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Check RAILWAY_SERVER_URL secret
         run: |
           if [ -z "$RAILWAY_SERVER_URL" ]; then
@@ -50,6 +56,11 @@ jobs:
               echo "  WARNING: Failed to sync PR #$PR_NUMBER (HTTP $HTTP_CODE, body: $BODY) — continuing"
             fi
           done
+
+      - name: Write DeepSeek conflict resolver script
+        run: |
+          echo "aW1wb3J0IGpzb24sIHVybGxpYi5yZXF1ZXN0LCBvcywgc3lzCgpjb25mbGljdGVkX2ZpbGUgPSBzeXMuYXJndlsxXQpwcl90aXRsZSA9IHN5cy5hcmd2WzJdCnByX2JvZHkgPSBzeXMuYXJndlszXQoKd2l0aCBvcGVuKGNvbmZsaWN0ZWRfZmlsZSkgYXMgZjoKICAgIGNvbnRlbnQgPSBmLnJlYWQoKQoKcHJvbXB0ID0gKAogICAgIllvdSBhcmUgcmVzb2x2aW5nIGEgZ2l0IG1lcmdlIGNvbmZsaWN0IGluIGEgZ2FtZSBjb2RlYmFzZSAoUGhhc2VyLmpzIGJyb3dzZXIgZ2FtZSkuXG5cbiIKICAgICJQUiB0aXRsZTogIiArIHByX3RpdGxlICsgIlxuIgogICAgIlBSIGRlc2NyaXB0aW9uOiAiICsgcHJfYm9keSArICJcblxuIgogICAgIlRoZSBmaWxlIGJlbG93IGhhcyBtZXJnZSBjb25mbGljdCBtYXJrZXJzLiBQcm9kdWNlIHRoZSBjb3JyZWN0bHkgbWVyZ2VkIHZlcnNpb24gIgogICAgIi0tIHByZXNlcnZlIHRoZSBpbnRlbnQgb2YgQk9USCB0aGUgUFIgYnJhbmNoICg8PDw8PDw8IEhFQUQgc2VjdGlvbikgYW5kIHRoZSBpbmNvbWluZyAiCiAgICAibWFpbiBicmFuY2ggKD4+Pj4+Pj4gc2VjdGlvbikuIE91dHB1dCBPTkxZIHRoZSByZXNvbHZlZCBmaWxlIGNvbnRlbnQsIG5vIGV4cGxhbmF0aW9uLCAiCiAgICAibm8gbWFya2Rvd24gZmVuY2VzLlxuXG4iICsgY29udGVudAopCgpwYXlsb2FkID0ganNvbi5kdW1wcyh7CiAgICAibW9kZWwiOiAiZGVlcHNlZWstY2hhdCIsCiAgICAibWVzc2FnZXMiOiBbeyJyb2xlIjogInVzZXIiLCAiY29udGVudCI6IHByb21wdH1dLAogICAgInRlbXBlcmF0dXJlIjogMC4xCn0pLmVuY29kZSgpCgphcGlfa2V5ID0gb3MuZW52aXJvblsiREVFUFNFRUtfQVBJX0tFWSJdCnJlcSA9IHVybGxpYi5yZXF1ZXN0LlJlcXVlc3QoCiAgICAiaHR0cHM6Ly9hcGkuZGVlcHNlZWsuY29tL2NoYXQvY29tcGxldGlvbnMiLAogICAgZGF0YT1wYXlsb2FkLAogICAgaGVhZGVycz17IkF1dGhvcml6YXRpb24iOiAiQmVhcmVyICIgKyBhcGlfa2V5LCAiQ29udGVudC1UeXBlIjogImFwcGxpY2F0aW9uL2pzb24ifQopCndpdGggdXJsbGliLnJlcXVlc3QudXJsb3BlbihyZXEsIHRpbWVvdXQ9NjApIGFzIHJlc3A6CiAgICByZXN1bHQgPSBqc29uLmxvYWRzKHJlc3AucmVhZCgpKQoKcmVzb2x2ZWQgPSByZXN1bHRbImNob2ljZXMiXVswXVsibWVzc2FnZSJdWyJjb250ZW50Il0KaWYgbm90IHJlc29sdmVkLnN0cmlwKCk6CiAgICByYWlzZSBWYWx1ZUVycm9yKCJEZWVwU2VlayByZXR1cm5lZCBlbXB0eSByZXNwb25zZSIpCmlmICI8PDw8PDw8IiBpbiByZXNvbHZlZDoKICAgIHJhaXNlIFZhbHVlRXJyb3IoIkRlZXBTZWVrIHJlc3BvbnNlIHN0aWxsIGNvbnRhaW5zIGNvbmZsaWN0IG1hcmtlcnMuIEZpcnN0IDIwMCBjaGFyczogIiArIHJlcHIocmVzb2x2ZWRbOjIwMF0pKQoKd2l0aCBvcGVuKGNvbmZsaWN0ZWRfZmlsZSwgInciKSBhcyBmOgogICAgZi53cml0ZShyZXNvbHZlZCkKCnByaW50KCJSZXNvbHZlZCAiICsgY29uZmxpY3RlZF9maWxlKQo=" | base64 -d > /tmp/deepseek_resolve.py
+          python3 -c "import ast; ast.parse(open('/tmp/deepseek_resolve.py').read()); print('resolver script syntax OK')"
 
       - name: Process PRs and take action
         run: |
@@ -162,7 +173,107 @@ jobs:
                     echo "  WARNING: Failed to log merge event (HTTP $LOG_CODE, body: $LOG_BODY) — merge still successful"
                   fi
                 else
-                  echo "  ERROR: Failed to merge PR #$PR_NUMBER (exit $MERGE_EXIT): $MERGE_OUTPUT"
+                  # Merge failed — check if it's a conflict
+                  MERGE_OUTPUT_LOWER=$(echo "$MERGE_OUTPUT" | tr '[:upper:]' '[:lower:]')
+                  if echo "$MERGE_OUTPUT_LOWER" | grep -qE "conflict|cannot be cleanly created|not mergeable"; then
+                    echo "  Merge conflict detected for PR #$PR_NUMBER — attempting auto-resolution via DeepSeek"
+
+                    # Check that DEEPSEEK_API_KEY is available
+                    if [ -z "$DEEPSEEK_API_KEY" ]; then
+                      echo "  WARNING: DEEPSEEK_API_KEY secret is not set — cannot auto-resolve conflict. Skipping PR #$PR_NUMBER."
+                      continue
+                    fi
+
+                    # Configure git bot identity
+                    git config user.email "governance-bot@living-game"
+                    git config user.name "Governance Bot"
+
+                    # Get PR branch name, title, and body
+                    PR_BRANCH=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefName --jq '.headRefName')
+                    PR_INFO=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json title,body)
+                    PR_TITLE=$(echo "$PR_INFO" | jq -r '.title')
+                    PR_BODY=$(echo "$PR_INFO" | jq -r '.body // ""')
+                    echo "  PR branch: $PR_BRANCH"
+                    echo "  PR title: $PR_TITLE"
+
+                    # Fetch and checkout the PR branch, then attempt merge with main to find conflicts
+                    git fetch origin
+                    git checkout "$PR_BRANCH"
+                    git merge origin/main --no-edit || true
+
+                    # Find conflicted files
+                    CONFLICTED_FILES=$(git diff --name-only --diff-filter=U)
+
+                    if [ -z "$CONFLICTED_FILES" ]; then
+                      echo "  Merge failed but no conflict markers found — skipping DeepSeek resolution"
+                      git merge --abort 2>/dev/null || true
+                      git checkout main
+                      echo "  ERROR: Failed to merge PR #$PR_NUMBER (exit $MERGE_EXIT): $MERGE_OUTPUT"
+                      continue
+                    fi
+
+                    echo "  Conflicted files:"
+                    echo "$CONFLICTED_FILES" | while read -r f; do echo "    $f"; done
+
+                    # Resolve each conflicted file via DeepSeek
+                    RESOLUTION_FAILED=0
+                    while IFS= read -r FILE; do
+                      echo "  Resolving conflict in $FILE via DeepSeek..."
+                      python3 /tmp/deepseek_resolve.py "$FILE" "$PR_TITLE" "$PR_BODY" || RESOLUTION_FAILED=1
+
+                      if [ "$RESOLUTION_FAILED" = "1" ]; then
+                        echo "  ERROR: DeepSeek resolution failed for $FILE — aborting conflict resolution for PR #$PR_NUMBER"
+                        break
+                      fi
+                      echo "  Resolved conflict in $FILE via DeepSeek"
+                    done <<< "$CONFLICTED_FILES"
+
+                    if [ "$RESOLUTION_FAILED" = "1" ]; then
+                      # Roll back: do not push partial resolution
+                      git merge --abort 2>/dev/null || git checkout -- . 2>/dev/null || true
+                      git checkout main
+                      continue
+                    fi
+
+                    # Commit all resolved files and push
+                    git add -A
+                    git commit -m "governance: auto-resolve merge conflicts with DeepSeek"
+                    PUSH_OUTPUT=$(git push origin "$PR_BRANCH" 2>&1) && PUSH_EXIT=0 || PUSH_EXIT=$?
+
+                    if [ "$PUSH_EXIT" -ne 0 ]; then
+                      echo "  ERROR: git push to $PR_BRANCH failed: $PUSH_OUTPUT"
+                      git checkout main
+                      continue
+                    fi
+
+                    echo "  Pushed resolved branch $PR_BRANCH — retrying merge"
+                    git checkout main
+
+                    # Retry merge after conflict resolution
+                    RETRY_OUTPUT=$(gh pr merge "$PR_NUMBER" --repo "$REPO" --merge \
+                      --subject "Merge PR #$PR_NUMBER (governance auto-merge)" 2>&1) && RETRY_EXIT=0 || RETRY_EXIT=$?
+
+                    echo "  Retry merge output: $RETRY_OUTPUT"
+
+                    if [ "$RETRY_EXIT" -eq 0 ]; then
+                      echo "  PR #$PR_NUMBER merged successfully after conflict resolution — logging event to server"
+                      LOG_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$RAILWAY_SERVER_URL/log-event" \
+                        -H "Content-Type: application/json" \
+                        -d "{\"type\": \"governance\", \"player\": null, \"message\": \"PR #$PR_NUMBER was automatically merged by governance workflow after DeepSeek conflict resolution (approvedSha: $APPROVED_SHA).\"}" \
+                        || echo "CURL_FAILED")
+                      LOG_CODE=$(echo "$LOG_RESPONSE" | tail -1)
+                      LOG_BODY=$(echo "$LOG_RESPONSE" | head -n -1)
+                      if [ "$LOG_CODE" = "200" ] || [ "$LOG_CODE" = "201" ]; then
+                        echo "  Log event recorded successfully (HTTP $LOG_CODE)"
+                      else
+                        echo "  WARNING: Failed to log merge event (HTTP $LOG_CODE, body: $LOG_BODY) — merge still successful"
+                      fi
+                    else
+                      echo "  ERROR: Retry merge of PR #$PR_NUMBER failed after conflict resolution (exit $RETRY_EXIT): $RETRY_OUTPUT"
+                    fi
+                  else
+                    echo "  ERROR: Failed to merge PR #$PR_NUMBER for non-conflict reason (exit $MERGE_EXIT): $MERGE_OUTPUT"
+                  fi
                 fi
               else
                 echo "  ACTION: Skipping PR #$PR_NUMBER (SHA mismatch — approvedSha '$APPROVED_SHA' != currentSha '$CURRENT_SHA')"
