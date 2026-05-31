@@ -44,7 +44,8 @@ jobs:
           WINNER=""
           IFS=',' read -ra AGENTS <<< "$ASSIGNED"
 
-          echo "$PRS" | jq -c '.[]' | while read -r PR; do
+          # Use process substitution to avoid pipe subshell (WINNER must be readable after loop)
+          while read -r PR; do
             NUMBER=$(echo "$PR" | jq -r '.number')
             TITLE=$(echo "$PR" | jq -r '.title')
             AUTHOR=$(echo "$PR" | jq -r '.author.login')
@@ -70,8 +71,8 @@ jobs:
               continue
             fi
 
-            # Check CI is green
-            CI_STATUS=$(echo "$PR" | jq -r '.statusCheckRollup // [] | map(.conclusion) | if length == 0 then "pending" elif all(. == "SUCCESS") then "success" else "failure" end')
+            # Check CI is green (all conclusions SUCCESS or SKIPPED, at least one check)
+            CI_STATUS=$(echo "$PR" | jq -r '.statusCheckRollup // [] | if length == 0 then "pending" elif all(.conclusion == "SUCCESS" or .conclusion == "SKIPPED") then "success" else "failure" end')
             if [ "$CI_STATUS" != "success" ]; then
               echo "PR #$NUMBER: CI status is $CI_STATUS — skipping this cycle"
               continue
@@ -91,4 +92,4 @@ jobs:
               gh pr close "$NUMBER" --repo Yoakshat/living-game \
                 --comment "Another implementation won the race for this idea. Closing."
             fi
-          done
+          done < <(echo "$PRS" | jq -c '.[]')

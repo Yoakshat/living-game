@@ -32,9 +32,9 @@ A browser-based multiplayer game where Claude Code agents are the players. Each 
 
 **Agent identity:** Each player defines their character in a local `CLAUDE.md` — name, personality, goals. Claude Code reads this and embodies the character while playing.
 
-**PR governance:** Agents see open PRs directly on GitHub (via `gh pr list` / `gh pr view`). They read the diff, decide yes or no, and approve/reject via `gh pr review`. GitHub Actions enforces that tests pass. A configurable threshold of approvals triggers auto-merge.
+**Idea governance:** Agents propose ideas (`POST /submit-idea`) and vote on each other's ideas (`POST /vote-idea`). When an idea hits quorum, the server picks up to 5 random connected agents and assigns them to race to implement it. Each assigned agent spawns a background subagent that opens a PR with `[idea:ID]` in the title. A GitHub Actions workflow (every 5 min) validates the first PR with the correct tag + CI green + assigned author, merges it, closes the rest, and calls `POST /idea-complete`. One idea active at a time — no merge conflicts.
 
-**The core loop:** Agents are always playing. They see the world, act in it, and occasionally propose changes to it. Other agents vote on those changes while still playing. The game evolves under them.
+**The core loop:** Agents are always playing. They see the world, act in it, propose ideas for changes, and race to implement approved ones. The game evolves under them.
 
 ## Key Files
 - `index.html` — full-viewport canvas mount (`#game`).
@@ -44,24 +44,20 @@ A browser-based multiplayer game where Claude Code agents are the players. Each 
 - `src/scenes/WorldScene.js` — the world: WASD movement, collisions, camera, multiplayer sync. Connects to `VITE_SERVER_URL` (Railway in prod, localhost:3001 in dev). Remote players render with unique colors + name tags. Exposes `window.__livingGame` hook for AI-agent introspection.
 - `.env.production` — sets `VITE_SERVER_URL` to the Railway server for production builds.
 - `.github/workflows/deploy.yml` — builds and deploys `dist/` to GitHub Pages on push to `main`.
-- `.github/workflows/governance.yml` — runs every 5 min; fetches `/vote-tally`, syncs SHAs, checks enforcer state, merges/closes PRs based on votes. Handles `needs-enforcer-review` (skip), `enforcer:approve` (merge), `enforcer:block` (close), and enforcer timeout (close after 30 min).
-- `server/index.js` — Node.js + Socket.io server. Assigns each player a unique color + generated name. Stores `githubUser` per player (set via `player:identify` event). Events: `self:init`, `player:join`, `player:moved`, `player:left`. Tracks per-PR: `authorGithubUser` (PR author, for self-vote blocking), votes keyed by `githubUser || socketId` (1 vote per GitHub profile per PR), `currentSha`, `approvedSha`, `enforcerState` (null | needs-enforcer-review | enforcer:approve | enforcer:block), `enforcerComment`, `enforcerPendingSince`, `newSha`. Endpoints: `GET /vote-tally`, `POST /sync-pr` (wipes votes if pre-threshold; transitions to enforcer review if post-threshold), `POST /enforcer-verdict` (enforcer posts approve/block), `GET /leaderboard` (aggregates by GitHub profile: `{ displayName, githubUser, color, prsmerged, worldChanges }`), `GET /log` (last 50 game-log entries as JSON array), `POST /log-event` (governance workflow posts PR merge events here), `GET /agent-profile/:githubUser` (returns `{ name, personality, directives }` or 404 if not found), `POST /agent-profile/:githubUser` (saves profile to in-memory store and to `server/profiles.json`). In-memory circular log buffer (max 100 entries): logs player connect/disconnect and movement samples every 10 moves. On startup, loads `server/profiles.json` if present so profiles survive restarts. Binds to `process.env.PORT`.
+- `.github/workflows/governance.yml` — runs every 5 min; fetches `/active-idea`, scans open PRs for `[idea:ID]` tag, validates author is in `assignedAgents` + CI green, merges winner, closes losers, calls `POST /idea-complete`. Requires `SERVER_URL` secret.
+- `server/index.js` — Node.js + Socket.io server. Assigns each player a unique color + generated name. Stores `githubUser` per player (set via `player:identify` event). Events: `self:init`, `player:join`, `player:moved`, `player:left`. Idea state: `ideaPool[]`, `activeIdea`, `ideasMerged` Map. Endpoints: `POST /submit-idea`, `POST /vote-idea`, `POST /idea-complete`, `GET /idea-state/:githubUser`, `GET /active-idea`, `GET /leaderboard` (aggregates by GitHub profile: `{ displayName, githubUser, color, ideasMerged, worldChanges }`), `GET /log`, `POST /log-event`, `GET /agent-profile/:githubUser`, `POST /agent-profile/:githubUser`. Quorum: `max(ceil(players * 0.05), 1)`. 30-min discard timer per active idea. Binds to `process.env.PORT`.
 - `server/profiles.json` — gitignored flat-file store for agent profiles, keyed by `githubUser`. Created at runtime by the server on the first `POST /agent-profile/:githubUser`. Loaded on server startup so profiles survive Railway restarts.
 - `server/package.json` — server dependencies (socket.io, express). `npm start` runs it.
 - `Procfile` — `web: node server/index.js` for Railway.
-- `enforcer/index.js` — Enforcer service. Polls `/vote-tally` every 60s, fetches GitHub diffs for PRs in `needs-enforcer-review`, calls DeepSeek (`deepseek-chat`) to judge if the diff is purely mechanical conflict resolution, posts verdict to `/enforcer-verdict`, and comments on the GitHub PR.
-- `enforcer/package.json` — enforcer dependencies (`openai (DeepSeek-compatible)`). `npm start` runs it.
-- `enforcer/Procfile` — `worker: node index.js` for Railway (no web port).
-- `enforcer/README.md` — deployment instructions and required env vars.
 - `src/ui/GameLog.js` — fixed HTML overlay panel (bottom-right, 300×180px, pointer-events:none). Polls `GET /log` every 5s and renders last 9 entries with timestamps, player names in their assigned color, and PR merge events in gold. Fails silently when offline.
 - `src/controls.md` — source of truth for all game inputs. Agents must update this file in any PR that changes a mechanic. Lives in `src/` so agent PRs can touch it (CI allows `src/` edits).
-- `agent/server.js` — Playwright browser controller. Runs `gh api user --jq .login` at startup to resolve the GitHub username, then fetches the saved profile from `GET /agent-profile/:githubUser` and writes it to `agent/character.md` (falls back to existing file if the server returns 404). File-watches `character.md` and pushes any changes back to `POST /agent-profile/:githubUser` so edits on disk stay in sync with the server. Then opens the game with `?characterName=<name>&gh=<githubUser>`. Exposes a local HTTP API on port 7979: `GET /screenshot` (returns PNG), `POST /press {keys, duration}` (presses WASD keys), `GET /health`, `POST /quit`.
+- `agent/server.js` — Playwright browser controller. Runs `gh api user --jq .login` at startup to resolve the GitHub username, then fetches the saved profile from `GET /agent-profile/:githubUser` and writes it to `agent/character.md`. File-watches `character.md` and pushes changes back to server. Opens the game with `?characterName=<name>&gh=<githubUser>`. Exposes local HTTP API on `AGENT_PORT` (default 7979): `GET /state` (position + nearbyPlayers + myAssignment + pendingIdeas), `GET /screenshot`, `POST /press {keys, duration}`, `GET /health`, `POST /quit`.
 - `agent/tui.js` — blessed-based terminal UI. Three panels: Personality (presets + custom edit), Directives (add/edit/delete up to 3), Leaderboard (fetches `/leaderboard` every 30s). After saving, POSTs the updated profile to `POST /agent-profile/:githubUser` and shows "Saved & synced" on success or "Saved locally — sync failed" if the server is unreachable. Run with `npm run tui` from `agent/`.
 - `agent/character.md` — the player's character definition (name, personality, directives, goals, movement style). Edit directly or via the TUI. Has `## Directives` section for strategic goals.
 - `agent/README.md` — instructions for running the agent and TUI.
-- `agent/governance.md` — PR governance rules (how to propose, review, and auto-merge PRs). Agents cannot edit this (outside `src/`, CI blocks it).
+- `agent/governance.md` — Idea governance rules (how to submit ideas, vote, get assigned, spawn background subagent, win the race). Agents cannot edit this (outside `src/`, CI blocks it).
 - `agent/package.json` — agent dependencies (playwright, blessed). Scripts: `start` (agent server), `tui` (terminal UI).
-- `~/.claude/commands/start.md` — `/start` Claude Code slash command. Tells Claude Code to launch the agent server and then loop as the character: screenshot → look → decide → press keys → repeat. Reads `src/controls.md` for inputs and `agent/governance.md` for meta-operations.
+- `~/.claude/commands/start.md` — `/start` Claude Code slash command. Agent loop: screenshot → move → check `/state` for idea assignment (spawn/stop background subagent) → every 5th iteration vote on pending ideas and submit new ones → repeat. Reads `src/controls.md` for inputs and `agent/governance.md` for idea system.
 
 ## How to Run
 ```bash
@@ -83,13 +79,9 @@ cd agent && npm install && npx playwright install chromium && node server.js
 cd agent && npm run tui
 # Optional: point at local server
 cd agent && SERVER_URL=http://localhost:3001 npm run tui
-
-# Enforcer service (local testing)
-cd enforcer && npm install && DEEPSEEK_API_KEY=... GITHUB_TOKEN=... SERVER_URL=... GITHUB_TOKEN=... npm start
 ```
 Frontend deploy: automatic on push to `main` via GitHub Actions → GitHub Pages.
-Server deploy: Railway project `living-game-server` (service: server).
-Enforcer deploy: Railway project `living-game-server` (separate service pointing to `enforcer/` directory). See `enforcer/README.md` for setup steps and required env vars.
+Server deploy: Railway project `living-game-server` (service: server). Requires `SERVER_URL` secret set in GitHub Actions for governance workflow.
 
 Live URLs:
 - Game: https://yoakshat.github.io/living-game/
