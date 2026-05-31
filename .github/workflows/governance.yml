@@ -1,0 +1,94 @@
+name: Governance
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  govern:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch active idea
+        id: active
+        env:
+          SERVER_URL: ${{ secrets.SERVER_URL }}
+        run: |
+          ACTIVE=$(curl -sf "${SERVER_URL}/active-idea" || echo "null")
+          echo "active=${ACTIVE}" >> $GITHUB_OUTPUT
+          IDEA_ID=$(echo "$ACTIVE" | jq -r '.id // empty')
+          echo "idea_id=${IDEA_ID}" >> $GITHUB_OUTPUT
+          ASSIGNED=$(echo "$ACTIVE" | jq -r '.assignedAgents // [] | join(",")')
+          echo "assigned=${ASSIGNED}" >> $GITHUB_OUTPUT
+
+      - name: Skip if no active idea
+        if: steps.active.outputs.idea_id == ''
+        run: echo "No active idea — nothing to govern." && exit 0
+
+      - name: Find and validate PRs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SERVER_URL: ${{ secrets.SERVER_URL }}
+          IDEA_ID: ${{ steps.active.outputs.idea_id }}
+          ASSIGNED: ${{ steps.active.outputs.assigned }}
+        run: |
+          # Fetch all open PRs
+          PRS=$(gh pr list --repo Yoakshat/living-game --state open --json number,title,author,statusCheckRollup --limit 50)
+
+          WINNER=""
+          IFS=',' read -ra AGENTS <<< "$ASSIGNED"
+
+          echo "$PRS" | jq -c '.[]' | while read -r PR; do
+            NUMBER=$(echo "$PR" | jq -r '.number')
+            TITLE=$(echo "$PR" | jq -r '.title')
+            AUTHOR=$(echo "$PR" | jq -r '.author.login')
+
+            # Must contain [idea:IDEA_ID] in title
+            if ! echo "$TITLE" | grep -qF "[idea:${IDEA_ID}]"; then
+              continue
+            fi
+
+            # Check author is in assignedAgents
+            AUTHOR_VALID=false
+            for AGENT in "${AGENTS[@]}"; do
+              if [ "$AGENT" = "$AUTHOR" ]; then
+                AUTHOR_VALID=true
+                break
+              fi
+            done
+
+            if [ "$AUTHOR_VALID" = "false" ]; then
+              echo "PR #$NUMBER: author $AUTHOR not in assigned agents — closing"
+              gh pr close "$NUMBER" --repo Yoakshat/living-game \
+                --comment "Author not in assigned agents for this idea. Closing."
+              continue
+            fi
+
+            # Check CI is green
+            CI_STATUS=$(echo "$PR" | jq -r '.statusCheckRollup // [] | map(.conclusion) | if length == 0 then "pending" elif all(. == "SUCCESS") then "success" else "failure" end')
+            if [ "$CI_STATUS" != "success" ]; then
+              echo "PR #$NUMBER: CI status is $CI_STATUS — skipping this cycle"
+              continue
+            fi
+
+            # First valid PR wins
+            if [ -z "$WINNER" ]; then
+              WINNER="$NUMBER"
+              echo "PR #$NUMBER is the winner — merging"
+              gh pr merge "$NUMBER" --repo Yoakshat/living-game --squash --admin
+              # Notify server
+              curl -sf -X POST "${SERVER_URL}/idea-complete" \
+                -H "Content-Type: application/json" \
+                -d "{\"ideaId\": \"${IDEA_ID}\"}" || true
+            else
+              echo "PR #$NUMBER: another PR already won — closing"
+              gh pr close "$NUMBER" --repo Yoakshat/living-game \
+                --comment "Another implementation won the race for this idea. Closing."
+            fi
+          done
