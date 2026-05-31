@@ -96,7 +96,7 @@ function assignColor() {
 // --- Idea system state -------------------------------------------------------
 // ideaPool: array of { id, description, submittedBy, votes: [], createdAt }
 const ideaPool = [];
-// activeIdea: null | { id, description, submittedBy, assignedAgents: [], assignedAt }
+// activeIdea: null | { id, description, submittedBy, assignedAgent: string, assignedAt }
 let activeIdea = null;
 // ideasMerged: Map<githubUser, number> — credit per idea author
 const ideasMerged = new Map();
@@ -113,25 +113,23 @@ function promoteIdea(idea) {
   const idx = ideaPool.indexOf(idea);
   if (idx !== -1) ideaPool.splice(idx, 1);
 
-  // Pick up to 5 random connected agents (players with githubUser set)
+  // Pick 1 random connected agent (with githubUser set)
   const eligible = [...players.values()].filter(p => p.githubUser);
-  const shuffled = eligible.sort(() => Math.random() - 0.5).slice(0, 5);
-  const assignedAgents = shuffled.map(p => p.githubUser);
-
-  if (assignedAgents.length === 0) {
+  if (eligible.length === 0) {
     console.log(`[idea] No connected agents — discarding idea "${idea.description}"`);
     advanceQueue();
     return;
   }
+  const assignedAgent = eligible[Math.floor(Math.random() * eligible.length)].githubUser;
 
   activeIdea = {
     id: idea.id,
     description: idea.description,
     submittedBy: idea.submittedBy,
-    assignedAgents,
+    assignedAgent,
     assignedAt: new Date(),
   };
-  console.log(`[idea] Promoted "${idea.description}" — assigned to: ${assignedAgents.join(', ')}`);
+  console.log(`[idea] Promoted "${idea.description}" — assigned to: ${assignedAgent}`);
 
   // 30-min discard timer
   discardTimer = setTimeout(() => {
@@ -349,7 +347,7 @@ app.post('/idea-complete', (req, res) => {
 app.get('/idea-state/:githubUser', (req, res) => {
   const { githubUser } = req.params;
 
-  const myAssignment = (activeIdea && activeIdea.assignedAgents.includes(githubUser))
+  const myAssignment = (activeIdea && activeIdea.assignedAgent === githubUser)
     ? { id: activeIdea.id, description: activeIdea.description }
     : null;
 
@@ -479,6 +477,21 @@ io.on('connection', (socket) => {
     usedColors.delete(p.color);
     players.delete(socket.id);
     io.emit('player:left', { id: p.id });
+
+    // If the disconnected agent was the assigned implementor, reassign immediately
+    if (activeIdea && activeIdea.assignedAgent === p.githubUser) {
+      console.log(`[idea] Assigned agent ${p.githubUser} disconnected — reassigning`);
+      const eligible = [...players.values()].filter(q => q.githubUser);
+      if (eligible.length === 0) {
+        console.log(`[idea] No agents left to reassign — discarding idea`);
+        clearTimeout(discardTimer);
+        activeIdea = null;
+        advanceQueue();
+      } else {
+        activeIdea.assignedAgent = eligible[Math.floor(Math.random() * eligible.length)].githubUser;
+        console.log(`[idea] Reassigned to ${activeIdea.assignedAgent}`);
+      }
+    }
   });
 });
 

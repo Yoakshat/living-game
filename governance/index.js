@@ -50,7 +50,7 @@ async function govern() {
   }
   if (!activeIdea || !activeIdea.id) return;
 
-  const { id: ideaId, assignedAgents } = activeIdea;
+  const { id: ideaId, assignedAgent } = activeIdea;
   const tag = `[idea:${ideaId}]`;
   log(`Active idea: ${ideaId} — scanning PRs for ${tag}`);
 
@@ -67,13 +67,13 @@ async function govern() {
     const author = pr.user.login;
     const num = pr.number;
 
-    // Must be an assigned agent
-    if (!assignedAgents.includes(author)) {
-      log(`PR #${num}: author ${author} not assigned — closing`);
+    // Must be the assigned agent
+    if (author !== assignedAgent) {
+      log(`PR #${num}: author ${author} is not the assigned agent (${assignedAgent}) — closing`);
       await ghFetch(`/issues/${num}/comments`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ body: `Author \`${author}\` is not in the assigned agents for this idea. Closing.` }),
+        body: JSON.stringify({ body: `Author \`${author}\` is not the assigned agent for this idea. Closing.` }),
       });
       await ghFetch(`/pulls/${num}`, {
         method: 'PATCH',
