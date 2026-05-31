@@ -301,42 +301,48 @@ async function handleRequest(req, res) {
     return;
   }
 
-  // Returns PRs this agent hasn't voted on yet, fetched directly from the game server
-  if (method === 'GET' && url === '/pending-votes') {
+  if (method === 'GET' && url === '/state') {
     try {
-      if (!githubUser) {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify([]));
-        return;
+      // Get position from the game page
+      let position = null;
+      let nearbyPlayers = [];
+      try {
+        const gameState = await page.evaluate(() => {
+          const g = window.__livingGame;
+          if (!g) return null;
+          return {
+            position: g.getPosition ? g.getPosition() : null,
+            nearbyPlayers: g.getNearbyPlayers ? g.getNearbyPlayers() : [],
+          };
+        });
+        if (gameState) {
+          position = gameState.position;
+          nearbyPlayers = gameState.nearbyPlayers || [];
+        }
+      } catch (_) {}
+
+      // Fetch idea state from game server
+      let myAssignment = null;
+      let pendingIdeas = [];
+      if (githubUser) {
+        try {
+          const ideaRes = await fetch(`${SERVER_URL}/idea-state/${encodeURIComponent(githubUser)}`, {
+            signal: AbortSignal.timeout(5000),
+          });
+          if (ideaRes.ok) {
+            const ideaData = await ideaRes.json();
+            myAssignment = ideaData.myAssignment || null;
+            pendingIdeas = ideaData.pendingIdeas || [];
+          }
+        } catch (_) {}
       }
-      const response = await fetch(`${SERVER_URL}/unvoted-prs?gh=${encodeURIComponent(githubUser)}`);
-      const data = await response.json();
+
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(data));
+      res.end(JSON.stringify({ position, nearbyPlayers, myAssignment, pendingIdeas }));
     } catch (err) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: err.message }));
     }
-    return;
-  }
-
-  // Cast a vote on a PR: { pr: number, vote: 'yes' | 'no' }
-  if (method === 'POST' && url === '/cast-vote') {
-    let body = '';
-    req.on('data', (chunk) => { body += chunk; });
-    req.on('end', async () => {
-      try {
-        const { pr, vote } = JSON.parse(body);
-        log(`cast-vote PR#${pr} → ${vote}`);
-        await page.evaluate(({ pr, vote }) => window.__livingGame.castVote(pr, vote), { pr, vote });
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true }));
-      } catch (err) {
-        log(`cast-vote ERROR: ${err.message}`);
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: err.message }));
-      }
-    });
     return;
   }
 

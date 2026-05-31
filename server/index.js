@@ -81,7 +81,7 @@ const players = new Map();
 const usedColors = new Set();
 
 // --- Leaderboard stats -------------------------------------------------------
-// playerStats: Map<githubUser|playerName, { displayName, githubUser, color, prsmerged, worldChanges }>
+// playerStats: Map<githubUser|playerName, { displayName, githubUser, color, worldChanges }>
 // Keyed by githubUser when available, otherwise by playerName.
 const playerStats = new Map();
 
@@ -93,153 +93,78 @@ function assignColor() {
   return `hsl(${h},80%,60%)`;
 }
 
-// --- PR governance state ----------------------------------------------------
-// prs: Map<prNumber, {
-//   number, title, url, openedAt, sha, currentSha, ciPassed,
-//   authorGithubUser,     // GitHub login of the PR author (used to block self-votes)
-//   votes: Map<voteKey, 'yes'|'no'>,  // voteKey = githubUser || socketId
-//   approvedSha,          // SHA when votes first crossed threshold (null until then)
-//   enforcerState,        // null | 'needs-enforcer-review' | 'enforcer:approve' | 'enforcer:block'
-//   enforcerComment,      // explanation from enforcer (for governance to relay on block)
-//   enforcerPendingSince, // Date when enforcerState was set to 'needs-enforcer-review'
-//   newSha,               // incoming SHA that triggered enforcer review
-// }>
-const prs = new Map();
+// --- Idea system state -------------------------------------------------------
+// ideaPool: array of { id, description, submittedBy, votes: [], createdAt }
+const ideaPool = [];
+// activeIdea: null | { id, description, submittedBy, assignedAgents: [], assignedAt }
+let activeIdea = null;
+// ideasMerged: Map<githubUser, number> — credit per idea author
+const ideasMerged = new Map();
+// discardTimer: handle for the 30-min timeout
+let discardTimer = null;
 
 // Compute quorum based on current active agents
 function getQuorum() {
   return Math.max(Math.ceil(players.size * 0.05), 1);
 }
 
-// Check if votes on a PR have crossed the approval threshold
-function isAtThreshold(pr) {
-  let yes = 0, total = 0;
-  for (const v of pr.votes.values()) {
-    total++;
-    if (v === 'yes') yes++;
+function promoteIdea(idea) {
+  // Remove from pool
+  const idx = ideaPool.indexOf(idea);
+  if (idx !== -1) ideaPool.splice(idx, 1);
+
+  // Pick up to 5 random connected agents (players with githubUser set)
+  const eligible = [...players.values()].filter(p => p.githubUser);
+  const shuffled = eligible.sort(() => Math.random() - 0.5).slice(0, 5);
+  const assignedAgents = shuffled.map(p => p.githubUser);
+
+  if (assignedAgents.length === 0) {
+    console.log(`[idea] No connected agents — discarding idea "${idea.description}"`);
+    advanceQueue();
+    return;
   }
-  const quorum = getQuorum();
-  return total >= quorum && (yes * 3) >= (total * 2);
-}
 
-async function githubFetch(url) {
-  const headers = { 'User-Agent': 'living-game-server' };
-  if (process.env.GITHUB_TOKEN) {
-    headers['Authorization'] = `token ${process.env.GITHUB_TOKEN}`;
-  }
-  const res = await fetch(url, { headers });
-  if (!res.ok) return null;
-  return await res.json();
-}
+  activeIdea = {
+    id: idea.id,
+    description: idea.description,
+    submittedBy: idea.submittedBy,
+    assignedAgents,
+    assignedAt: new Date(),
+  };
+  console.log(`[idea] Promoted "${idea.description}" — assigned to: ${assignedAgents.join(', ')}`);
 
-async function fetchOpenPRs() {
-  try {
-    return await githubFetch(
-      'https://api.github.com/repos/Yoakshat/living-game/pulls?state=open&per_page=20'
-    );
-  } catch {
-    return null;
-  }
-}
-
-// Returns 'passed' | 'failed' | 'pending'
-async function getCIStatus(sha) {
-  try {
-    const data = await githubFetch(
-      `https://api.github.com/repos/Yoakshat/living-game/commits/${sha}/check-runs`
-    );
-    if (!data || data.total_count === 0) return 'pending';
-    const runs = data.check_runs;
-    if (runs.some((r) => ['failure', 'timed_out', 'cancelled'].includes(r.conclusion))) return 'failed';
-    if (runs.some((r) => r.status === 'in_progress' || r.status === 'queued')) return 'pending';
-    return 'passed';
-  } catch {
-    return 'pending';
-  }
-}
-
-async function pollGitHub() {
-  const openPRs = await fetchOpenPRs();
-  if (!openPRs) return;
-
-  const openNumbers = new Set(openPRs.map((pr) => pr.number));
-
-  // Remove PRs that closed/merged since last poll
-  for (const num of prs.keys()) {
-    if (!openNumbers.has(num)) {
-      console.log(`[PR] #${num} closed — removing from tracking`);
-      prs.delete(num);
+  // 30-min discard timer
+  discardTimer = setTimeout(() => {
+    if (activeIdea && activeIdea.id === idea.id) {
+      console.log(`[idea] 30-min timeout — discarding "${idea.description}"`);
+      activeIdea = null;
+      advanceQueue();
     }
-  }
-
-  // Detect new PRs; track them but only notify agents once CI passes
-  for (const pr of openPRs) {
-    if (!prs.has(pr.number)) {
-      // Extract author GitHub username from the PR payload
-      const authorGithubUser = pr.user && pr.user.login ? pr.user.login : null;
-      prs.set(pr.number, {
-        number: pr.number,
-        title: pr.title,
-        url: pr.html_url,
-        openedAt: new Date(pr.created_at),
-        sha: pr.head.sha,
-        currentSha: pr.head.sha,
-        ciPassed: false,
-        authorGithubUser,
-        votes: new Map(),
-        approvedSha: null,
-        enforcerState: null,
-        enforcerComment: null,
-        enforcerPendingSince: null,
-        newSha: null,
-      });
-      console.log(`[PR] Tracking #${pr.number}: ${pr.title} (author: ${authorGithubUser || 'unknown'}, waiting for CI)`);
-    }
-  }
-
-  // Promote PRs to voting once CI passes
-  for (const pr of prs.values()) {
-    if (pr.ciPassed) continue;
-    const ci = await getCIStatus(pr.currentSha);
-    if (ci === 'passed') {
-      pr.ciPassed = true;
-      console.log(`[PR] #${pr.number} CI passed — notifying agents`);
-      for (const [socketId, playerData] of players) {
-        // Skip players whose identity (githubUser or socket id) has already voted
-        const voteKey = playerData.githubUser || playerData.id;
-        if (pr.votes.has(voteKey)) continue;
-        io.to(socketId).emit('pr:review_needed', [
-          { number: pr.number, title: pr.title, url: pr.url },
-        ]);
-      }
-    } else if (ci === 'failed') {
-      console.log(`[PR] #${pr.number} CI failed — governance will close it`);
-    }
-  }
+  }, 30 * 60 * 1000);
 }
 
-// Poll every 2 minutes (safely under unauthenticated GitHub rate limit of 60 req/hr)
-setInterval(pollGitHub, 2 * 60 * 1000);
-setTimeout(pollGitHub, 5000); // initial poll shortly after boot
+function advanceQueue() {
+  // Find earliest idea in pool that has reached quorum
+  const ready = ideaPool.find(i => i.votes.length >= getQuorum());
+  if (ready) promoteIdea(ready);
+}
 
 // --- Express + Socket.io ----------------------------------------------------
 const app = express();
 const server = http.createServer(app);
 
+function isAllowedOrigin(origin) {
+  return (
+    !origin ||
+    origin === 'https://yoakshat.github.io' ||
+    /^https?:\/\/localhost(:\d+)?$/.test(origin) ||
+    /^https?:\/\/127\.0\.0\.1(:\d+)?$/.test(origin)
+  );
+}
+
 const io = new Server(server, {
   cors: {
-    origin: (origin, callback) => {
-      if (
-        !origin ||
-        origin === 'https://yoakshat.github.io' ||
-        /^https?:\/\/localhost(:\d+)?$/.test(origin) ||
-        /^https?:\/\/127\.0\.0\.1(:\d+)?$/.test(origin)
-      ) {
-        callback(null, true);
-      } else {
-        callback(null, false);
-      }
-    },
+    origin: (origin, callback) => callback(null, isAllowedOrigin(origin)),
     methods: ['GET', 'HEAD', 'POST'],
     credentials: false,
   },
@@ -250,12 +175,7 @@ app.use(express.json());
 // Allow GitHub Pages and localhost to fetch REST endpoints (log, leaderboard, etc.)
 app.use((req, res, next) => {
   const origin = req.headers.origin || '';
-  if (
-    !origin ||
-    origin === 'https://yoakshat.github.io' ||
-    /^https?:\/\/localhost(:\d+)?$/.test(origin) ||
-    /^https?:\/\/127\.0\.0\.1(:\d+)?$/.test(origin)
-  ) {
+  if (isAllowedOrigin(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin || '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -267,7 +187,7 @@ app.use((req, res, next) => {
 app.get('/', (_req, res) => res.json({ status: 'ok' }));
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
-// Leaderboard — returns players aggregated by GitHub profile, ranked by PRs merged + world changes
+// Leaderboard — returns players aggregated by GitHub profile, ranked by ideas merged + world changes
 app.get('/leaderboard', (_req, res) => {
   // Aggregate playerStats by githubUser (when present) to collapse multiple agents
   // into a single entry. Players without a githubUser keep individual entries.
@@ -280,18 +200,18 @@ app.get('/leaderboard', (_req, res) => {
         displayName: entry.githubUser || entry.displayName,
         githubUser: entry.githubUser || null,
         color: entry.color,
-        prsmerged: entry.prsmerged || 0,
+        ideasMerged: ideasMerged.get(entry.githubUser) || 0,
         worldChanges: entry.worldChanges || 0,
       });
     } else {
       const agg = aggregated.get(key);
-      agg.prsmerged = (agg.prsmerged || 0) + (entry.prsmerged || 0);
+      agg.ideasMerged = ideasMerged.get(entry.githubUser) || 0;
       agg.worldChanges = (agg.worldChanges || 0) + (entry.worldChanges || 0);
     }
   }
 
   const stats = [...aggregated.values()].sort((a, b) => {
-    const score = (p) => (p.prsmerged || 0) * 3 + (p.worldChanges || 0);
+    const score = (p) => (p.ideasMerged || 0) * 3 + (p.worldChanges || 0);
     return score(b) - score(a);
   });
   res.json(stats);
@@ -341,144 +261,110 @@ app.post('/agent-profile/:githubUser', (req, res) => {
   res.json({ ok: true });
 });
 
-// Returns open PRs (CI passed) that the given GitHub user hasn't voted on yet
-app.get('/unvoted-prs', (req, res) => {
-  const gh = req.query.gh;
-  if (!gh) return res.status(400).json({ error: 'gh query param required' });
-  const unvoted = [...prs.values()]
-    .filter((pr) => pr.ciPassed && !pr.votes.has(gh))
-    .map((pr) => ({ number: pr.number, title: pr.title, url: pr.url }));
-  res.json(unvoted);
+// --- Idea endpoints ----------------------------------------------------------
+
+// Submit a new idea to the pool
+app.post('/submit-idea', (req, res) => {
+  const { description, submittedBy } = req.body || {};
+  if (typeof description !== 'string' || typeof submittedBy !== 'string') {
+    return res.status(400).json({ error: 'description (string) and submittedBy (string) required' });
+  }
+  const idea = {
+    id: generateId(),
+    description,
+    submittedBy,
+    votes: [],
+    createdAt: new Date(),
+  };
+  ideaPool.push(idea);
+  console.log(`[idea] New idea submitted by ${submittedBy}: "${description}" (id: ${idea.id})`);
+  res.json({ ideaId: idea.id });
 });
 
-// Governance workflow reads this to decide merge/close
-app.get('/vote-tally', (_req, res) => {
-  const activeAgents = players.size;
-  const tally = [...prs.values()].map((pr) => {
-    let yes = 0, no = 0;
-    for (const vote of pr.votes.values()) {
-      if (vote === 'yes') yes++;
-      else no++;
-    }
-    const entry = {
-      number: pr.number,
-      title: pr.title,
-      url: pr.url,
-      openedAt: pr.openedAt,
-      currentSha: pr.currentSha,
-      yesVotes: yes,
-      noVotes: no,
-      totalVotes: yes + no,
-      approvedSha: pr.approvedSha,
-      enforcerState: pr.enforcerState,
-      enforcerComment: pr.enforcerComment,
-      enforcerPendingSince: pr.enforcerPendingSince,
-      newSha: pr.newSha,
-    };
-    return entry;
-  });
-  res.json({ activeAgents, prs: tally });
+// Vote on an idea
+app.post('/vote-idea', (req, res) => {
+  const { ideaId, githubUser } = req.body || {};
+  if (typeof ideaId !== 'string' || typeof githubUser !== 'string') {
+    return res.status(400).json({ error: 'ideaId (string) and githubUser (string) required' });
+  }
+
+  if (activeIdea && activeIdea.id === ideaId) {
+    return res.status(400).json({ error: 'idea already active' });
+  }
+
+  const idea = ideaPool.find(i => i.id === ideaId);
+  if (!idea) {
+    return res.status(404).json({ error: 'idea not found' });
+  }
+
+  // Idempotent — ignore duplicate votes
+  if (idea.votes.includes(githubUser)) {
+    return res.json({ votes: idea.votes.length });
+  }
+
+  idea.votes.push(githubUser);
+  console.log(`[idea] ${githubUser} voted on "${idea.description}" — ${idea.votes.length} vote(s)`);
+
+  // Check quorum: promote if threshold reached and no active idea
+  if (idea.votes.length >= getQuorum() && !activeIdea) {
+    promoteIdea(idea);
+  }
+
+  res.json({ votes: idea.votes.length });
 });
 
-// Called by governance workflow at the start of each poll cycle per PR.
-// If sha differs from currentSha:
-//   - If votes were at threshold → transition to 'needs-enforcer-review' (keep votes)
-//   - If votes were NOT at threshold → wipe votes (existing behavior)
-app.post('/sync-pr', (req, res) => {
-  const { prNumber, sha } = req.body || {};
-  if (typeof prNumber !== 'number' || typeof sha !== 'string') {
-    return res.status(400).json({ error: 'prNumber (number) and sha (string) required' });
-  }
-  const pr = prs.get(prNumber);
-  if (!pr) {
-    return res.json({ status: 'unknown', wiped: false });
-  }
-  if (sha === pr.currentSha) {
-    return res.json({ status: 'unchanged', wiped: false });
+// Mark active idea as complete (called by governance workflow after merging)
+app.post('/idea-complete', (req, res) => {
+  const { ideaId } = req.body || {};
+
+  // Idempotent — if no active idea or id doesn't match, noop
+  if (!activeIdea || activeIdea.id !== ideaId) {
+    return res.json({ ok: true, noop: true });
   }
 
-  // SHA changed — check if votes were already at threshold
-  const atThreshold = pr.approvedSha !== null || isAtThreshold(pr);
-
-  if (atThreshold) {
-    // Votes had crossed threshold: transition to enforcer review
-    pr.enforcerState = 'needs-enforcer-review';
-    pr.enforcerPendingSince = new Date();
-    pr.newSha = sha;
-    // Keep currentSha as approvedSha for diff comparison; don't update it yet
-    // approvedSha is already set (or set it now if threshold was just crossed inline)
-    if (!pr.approvedSha) {
-      pr.approvedSha = pr.currentSha;
-    }
-    console.log(`[sync-pr] #${prNumber} SHA changed to ${sha.slice(0, 7)} — votes at threshold, transitioning to enforcer review (approvedSha=${pr.approvedSha.slice(0, 7)})`);
-    return res.json({ status: 'enforcer-pending', wiped: false });
-  } else {
-    // Votes had NOT crossed threshold: wipe votes (existing behavior)
-    pr.votes.clear();
-    pr.currentSha = sha;
-    pr.approvedSha = null;
-    pr.enforcerState = null;
-    pr.enforcerComment = null;
-    pr.enforcerPendingSince = null;
-    pr.newSha = null;
-    pr.ciPassed = false;
-    console.log(`[sync-pr] #${prNumber} SHA changed to ${sha.slice(0, 7)} — votes wiped, re-gating CI`);
-    io.emit('pr:revote', { prNumber, sha });
-    return res.json({ status: 'wiped', wiped: true });
+  // Clear discard timer
+  if (discardTimer) {
+    clearTimeout(discardTimer);
+    discardTimer = null;
   }
+
+  // Award credit to idea author
+  const submittedBy = activeIdea.submittedBy;
+  ideasMerged.set(submittedBy, (ideasMerged.get(submittedBy) || 0) + 1);
+  console.log(`[idea] Idea "${activeIdea.description}" complete — credit to ${submittedBy} (total: ${ideasMerged.get(submittedBy)})`);
+
+  // Remove from pool if still there (shouldn't be, but defensive)
+  const idx = ideaPool.findIndex(i => i.id === ideaId);
+  if (idx !== -1) ideaPool.splice(idx, 1);
+
+  activeIdea = null;
+
+  // Advance queue
+  advanceQueue();
+
+  res.json({ ok: true });
 });
 
-// Enforcer service posts verdict here
-// Body: { prNumber, verdict: 'approve' | 'block', reason, sha }
-// 'sha' is the currentSha the enforcer analyzed — rejected if it no longer matches (stale verdict)
-app.post('/enforcer-verdict', (req, res) => {
-  const { prNumber, verdict, reason, sha } = req.body || {};
-  if (
-    typeof prNumber !== 'number' ||
-    (verdict !== 'approve' && verdict !== 'block') ||
-    typeof reason !== 'string'
-  ) {
-    return res.status(400).json({ error: 'prNumber (number), verdict (approve|block), reason (string) required' });
-  }
+// Per-agent idea state — used by agent server to populate /state
+app.get('/idea-state/:githubUser', (req, res) => {
+  const { githubUser } = req.params;
 
-  const pr = prs.get(prNumber);
-  if (!pr) {
-    return res.status(404).json({ error: 'PR not found' });
-  }
-  if (pr.enforcerState !== 'needs-enforcer-review') {
-    return res.json({ status: 'ignored', reason: 'PR not in enforcer-pending state' });
-  }
+  const myAssignment = (activeIdea && activeIdea.assignedAgents.includes(githubUser))
+    ? { id: activeIdea.id, description: activeIdea.description }
+    : null;
 
-  // Reject stale verdicts: if enforcer analyzed an old newSha
-  if (sha && pr.newSha && sha !== pr.newSha) {
-    console.log(`[enforcer-verdict] #${prNumber} stale verdict for sha ${sha.slice(0, 7)} (current newSha=${pr.newSha.slice(0, 7)}) — ignoring`);
-    return res.json({ status: 'stale', reason: 'SHA mismatch — verdict ignored' });
-  }
+  const pendingIdeas = ideaPool.map(i => ({
+    id: i.id,
+    description: i.description,
+    votes: i.votes.length,
+  }));
 
-  if (verdict === 'approve') {
-    // Clear enforcer pending, update currentSha to the new one, keep votes intact
-    pr.enforcerState = 'enforcer:approve';
-    pr.enforcerComment = reason;
-    pr.currentSha = pr.newSha;
-    pr.approvedSha = pr.newSha; // treat the new SHA as approved
-    pr.enforcerPendingSince = null;
-    pr.newSha = null;
-    pr.ciPassed = false; // re-gate CI on the new SHA
-    console.log(`[enforcer-verdict] #${prNumber} APPROVED: ${reason}`);
-    return res.json({ status: 'approved' });
-  } else {
-    // Block: clear enforcer pending, wipe votes, update currentSha
-    pr.enforcerState = 'enforcer:block';
-    pr.enforcerComment = reason;
-    pr.currentSha = pr.newSha;
-    pr.approvedSha = null;
-    pr.votes.clear();
-    pr.enforcerPendingSince = null;
-    pr.newSha = null;
-    pr.ciPassed = false;
-    console.log(`[enforcer-verdict] #${prNumber} BLOCKED: ${reason}`);
-    return res.json({ status: 'blocked' });
-  }
+  res.json({ myAssignment, pendingIdeas });
+});
+
+// Active idea — used by governance workflow
+app.get('/active-idea', (_req, res) => {
+  res.json(activeIdea);
 });
 
 // --- Socket.io events -------------------------------------------------------
@@ -497,7 +383,7 @@ io.on('connection', (socket) => {
   // Initialise leaderboard entry for new players (preserve existing stats on reconnect)
   // Initially keyed by name; will be re-keyed to githubUser once player:identify arrives.
   if (!playerStats.has(name)) {
-    playerStats.set(name, { displayName: name, githubUser: null, color, prsmerged: 0, worldChanges: 0 });
+    playerStats.set(name, { displayName: name, githubUser: null, color, worldChanges: 0 });
   } else {
     // Update color in case it changed
     playerStats.get(name).color = color;
@@ -537,7 +423,6 @@ io.on('connection', (socket) => {
         // A stats entry already exists for this GitHub user (from a previous session or another agent).
         // Merge the name-keyed stats into the github-keyed stats and remove the name entry.
         if (nameStats && oldStatsKey !== githubUser) {
-          existingGhStats.prsmerged = (existingGhStats.prsmerged || 0) + (nameStats.prsmerged || 0);
           existingGhStats.worldChanges = (existingGhStats.worldChanges || 0) + (nameStats.worldChanges || 0);
           playerStats.delete(oldStatsKey);
         }
@@ -552,7 +437,7 @@ io.on('connection', (socket) => {
         playerStats.set(githubUser, nameStats);
       } else {
         // No existing entry — create fresh
-        playerStats.set(githubUser, { displayName: githubUser, githubUser, color: p.color, prsmerged: 0, worldChanges: 0 });
+        playerStats.set(githubUser, { displayName: githubUser, githubUser, color: p.color, worldChanges: 0 });
       }
 
       console.log(`[~] ${p.name} identified as GitHub user: ${githubUser}`);
@@ -567,17 +452,6 @@ io.on('connection', (socket) => {
         p.name = requestedName;
         io.emit('player:renamed', { id: p.id, name: p.name });
       }
-    }
-
-    // Send CI-passed PRs this identity hasn't voted on yet.
-    // Use githubUser as the vote key if available, so a second agent from the same
-    // user won't re-receive PRs already voted on by the first agent.
-    const effectiveVoteKey = p.githubUser || p.id;
-    const unvoted = [...prs.values()]
-      .filter((pr) => pr.ciPassed && !pr.votes.has(effectiveVoteKey))
-      .map((pr) => ({ number: pr.number, title: pr.title, url: pr.url }));
-    if (unvoted.length > 0) {
-      socket.emit('pr:review_needed', unvoted);
     }
   });
 
@@ -594,45 +468,6 @@ io.on('connection', (socket) => {
     if (now - p.lastLoggedAt >= 30_000) {
       p.lastLoggedAt = now;
       addLogEntry('action', p.name, `${p.name} is exploring`);
-    }
-  });
-
-  // PR vote: { prNumber: number, vote: 'yes' | 'no' }
-  socket.on('pr:vote', (data) => {
-    const p = players.get(socket.id);
-    if (!p) return;
-    const { prNumber, vote } = data;
-    if (typeof prNumber !== 'number' || (vote !== 'yes' && vote !== 'no')) return;
-    const pr = prs.get(prNumber);
-    if (!pr) return;
-    // Don't allow voting on PRs in enforcer review or already decided
-    if (pr.enforcerState) return;
-
-    // Block self-voting: reject if voter is the PR author
-    if (p.githubUser && pr.authorGithubUser && p.githubUser === pr.authorGithubUser) {
-      console.log(`[vote] ${p.name} (${p.githubUser}) tried to self-vote on PR #${prNumber} — rejected`);
-      return;
-    }
-
-    // Key votes by githubUser when available, so multiple agents from the same
-    // user only count once. Fall back to socket id for anonymous players.
-    const voteKey = p.githubUser || p.id;
-
-    // If this identity already voted, ignore the new vote (first vote wins)
-    if (pr.votes.has(voteKey)) {
-      console.log(`[vote] ${p.name} (key: ${voteKey}) already voted on PR #${prNumber} — ignored`);
-      return;
-    }
-
-    pr.votes.set(voteKey, vote);
-    let yes = 0, no = 0;
-    for (const v of pr.votes.values()) { if (v === 'yes') yes++; else no++; }
-    console.log(`[vote] ${p.name} (key: ${voteKey}) voted ${vote} on PR #${prNumber} — ${yes}y/${no}n`);
-
-    // Check if votes just crossed the approval threshold
-    if (!pr.approvedSha && isAtThreshold(pr)) {
-      pr.approvedSha = pr.currentSha;
-      console.log(`[vote] PR #${prNumber} crossed approval threshold — approvedSha set to ${pr.approvedSha.slice(0, 7)}`);
     }
   });
 
