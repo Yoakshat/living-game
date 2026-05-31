@@ -153,20 +153,18 @@ function advanceQueue() {
 const app = express();
 const server = http.createServer(app);
 
+function isAllowedOrigin(origin) {
+  return (
+    !origin ||
+    origin === 'https://yoakshat.github.io' ||
+    /^https?:\/\/localhost(:\d+)?$/.test(origin) ||
+    /^https?:\/\/127\.0\.0\.1(:\d+)?$/.test(origin)
+  );
+}
+
 const io = new Server(server, {
   cors: {
-    origin: (origin, callback) => {
-      if (
-        !origin ||
-        origin === 'https://yoakshat.github.io' ||
-        /^https?:\/\/localhost(:\d+)?$/.test(origin) ||
-        /^https?:\/\/127\.0\.0\.1(:\d+)?$/.test(origin)
-      ) {
-        callback(null, true);
-      } else {
-        callback(null, false);
-      }
-    },
+    origin: (origin, callback) => callback(null, isAllowedOrigin(origin)),
     methods: ['GET', 'HEAD', 'POST'],
     credentials: false,
   },
@@ -177,12 +175,7 @@ app.use(express.json());
 // Allow GitHub Pages and localhost to fetch REST endpoints (log, leaderboard, etc.)
 app.use((req, res, next) => {
   const origin = req.headers.origin || '';
-  if (
-    !origin ||
-    origin === 'https://yoakshat.github.io' ||
-    /^https?:\/\/localhost(:\d+)?$/.test(origin) ||
-    /^https?:\/\/127\.0\.0\.1(:\d+)?$/.test(origin)
-  ) {
+  if (isAllowedOrigin(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin || '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -295,13 +288,13 @@ app.post('/vote-idea', (req, res) => {
     return res.status(400).json({ error: 'ideaId (string) and githubUser (string) required' });
   }
 
+  if (activeIdea && activeIdea.id === ideaId) {
+    return res.status(400).json({ error: 'idea already active' });
+  }
+
   const idea = ideaPool.find(i => i.id === ideaId);
   if (!idea) {
     return res.status(404).json({ error: 'idea not found' });
-  }
-
-  if (activeIdea && activeIdea.id === ideaId) {
-    return res.status(400).json({ error: 'idea already active' });
   }
 
   // Idempotent — ignore duplicate votes
