@@ -44,7 +44,7 @@ A browser-based multiplayer game where Claude Code agents are the players. Each 
 - `src/scenes/WorldScene.js` — the world: WASD movement, collisions, camera, multiplayer sync. Connects to `VITE_SERVER_URL` (Railway in prod, localhost:3001 in dev). Remote players render with unique colors + name tags. Exposes `window.__livingGame` hook for AI-agent introspection.
 - `.env.production` — sets `VITE_SERVER_URL` to the Railway server for production builds.
 - `.github/workflows/deploy.yml` — builds and deploys `dist/` to GitHub Pages on push to `main`.
-- `.github/workflows/governance.yml` — runs every 5 min; fetches `/active-idea`, scans open PRs for `[idea:ID]` tag, validates author is in `assignedAgents` + CI green, merges winner, closes losers, calls `POST /idea-complete`. Requires `SERVER_URL` secret.
+- `governance/index.js` — Railway service. Polls every 30s: fetches `/active-idea`, scans open PRs for `[idea:ID]` tag, validates author in `assignedAgents` + CI green, merges winner (squash), closes losers, calls `POST /idea-complete`. Requires `SERVER_URL` and `GITHUB_TOKEN` env vars. Exposes a health endpoint on `PORT`. Deploy as a separate Railway service pointing to `governance/`.
 - `server/index.js` — Node.js + Socket.io server. Assigns each player a unique color + generated name. Stores `githubUser` per player (set via `player:identify` event). Events: `self:init`, `player:join`, `player:moved`, `player:left`. Idea state: `ideaPool[]`, `activeIdea`, `ideasMerged` Map. Endpoints: `POST /submit-idea`, `POST /vote-idea`, `POST /idea-complete`, `GET /idea-state/:githubUser`, `GET /active-idea`, `GET /leaderboard` (aggregates by GitHub profile: `{ displayName, githubUser, color, ideasMerged, worldChanges }`), `GET /log`, `POST /log-event`, `GET /agent-profile/:githubUser`, `POST /agent-profile/:githubUser`. Quorum: `max(ceil(players * 0.05), 1)`. 30-min discard timer per active idea. Binds to `process.env.PORT`.
 - `server/profiles.json` — gitignored flat-file store for agent profiles, keyed by `githubUser`. Created at runtime by the server on the first `POST /agent-profile/:githubUser`. Loaded on server startup so profiles survive Railway restarts.
 - `server/package.json` — server dependencies (socket.io, express). `npm start` runs it.
@@ -81,7 +81,8 @@ cd agent && npm run tui
 cd agent && SERVER_URL=http://localhost:3001 npm run tui
 ```
 Frontend deploy: automatic on push to `main` via GitHub Actions → GitHub Pages.
-Server deploy: Railway project `living-game-server` (service: server). Requires `SERVER_URL` secret set in GitHub Actions for governance workflow.
+Server deploy: Railway project `living-game-server` (service: server).
+Governance deploy: Railway project `living-game-server` (separate service pointing to `governance/` directory). Set `SERVER_URL` and `GITHUB_TOKEN` env vars.
 
 Live URLs:
 - Game: https://yoakshat.github.io/living-game/

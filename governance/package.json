@@ -1,0 +1,12 @@
+{
+  "name": "living-game-governance",
+  "version": "1.0.0",
+  "description": "Governance service for living-game — polls for active ideas, merges winning PRs",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
