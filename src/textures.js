@@ -609,6 +609,100 @@ function makeHealingSpringTexture(scene, key) {
   return { w: SPRING_W, h: SPRING_H };
 }
 
+// --- Imperial Beacon Tower -------------------------------------------------
+// A tall dark spire marking the seat of Imperial power on the north bank.
+// Stone base narrows into a slender dark spire crowned with a red warning light.
+const BEACON_W = 60;
+const BEACON_H = 100;
+
+function makeBeaconTowerTexture(scene, key) {
+  const g = scene.make.graphics({ x: 0, y: 0, add: false });
+  const cx = BEACON_W / 2;
+
+  // Ground shadow — elongated ellipse beneath the tower.
+  g.fillStyle(0x000000, 0.28);
+  g.fillEllipse(cx, BEACON_H - 6, 50, 14);
+
+  // Base foundation — wide dark stone slab at the bottom.
+  g.fillStyle(0x2a2a2e, 1);
+  g.fillRoundedRect(cx - 22, BEACON_H - 26, 44, 22, 3);
+  // Highlight on the top edge of the base.
+  g.fillStyle(0x4a4a52, 0.7);
+  g.fillRect(cx - 20, BEACON_H - 26, 40, 3);
+  // Shadow on the right side of the base.
+  g.fillStyle(0x18181a, 0.8);
+  g.fillRoundedRect(cx + 6, BEACON_H - 26, 14, 22, { tl: 0, tr: 3, br: 3, bl: 0 });
+
+  // Lower spire body — tapered stone pillar.
+  // Wide at the bottom, narrowing as it rises.
+  const spirePoints = [
+    cx - 14, BEACON_H - 24,
+    cx + 14, BEACON_H - 24,
+    cx + 9,  BEACON_H - 50,
+    cx - 9,  BEACON_H - 50,
+  ];
+  g.fillStyle(0x242428, 1);
+  g.fillPoints(toPoints(spirePoints), true);
+  // Left highlight strip on the lower spire.
+  g.fillStyle(0x3c3c44, 0.8);
+  g.fillRect(cx - 13, BEACON_H - 48, 4, 23);
+  // Right shadow strip.
+  g.fillStyle(0x141416, 0.9);
+  g.fillRect(cx + 5, BEACON_H - 48, 4, 23);
+
+  // Middle spire section — narrower, continues upward.
+  const midPoints = [
+    cx - 9,  BEACON_H - 50,
+    cx + 9,  BEACON_H - 50,
+    cx + 5,  BEACON_H - 74,
+    cx - 5,  BEACON_H - 74,
+  ];
+  g.fillStyle(0x1e1e22, 1);
+  g.fillPoints(toPoints(midPoints), true);
+  g.fillStyle(0x343440, 0.7);
+  g.fillRect(cx - 8, BEACON_H - 73, 3, 23);
+  g.fillStyle(0x0f0f11, 0.9);
+  g.fillRect(cx + 4, BEACON_H - 73, 3, 23);
+
+  // Upper spire — the thin needle tip.
+  const upperPoints = [
+    cx - 5,  BEACON_H - 74,
+    cx + 5,  BEACON_H - 74,
+    cx + 2,  BEACON_H - 90,
+    cx - 2,  BEACON_H - 90,
+  ];
+  g.fillStyle(0x1a1a1e, 1);
+  g.fillPoints(toPoints(upperPoints), true);
+
+  // Very tip of the spire.
+  g.fillStyle(0x111114, 1);
+  g.fillTriangle(cx - 2, BEACON_H - 90, cx + 2, BEACON_H - 90, cx, BEACON_H - 98);
+
+  // Small collar / parapet ring just below the beacon light.
+  g.fillStyle(0x303038, 1);
+  g.fillRoundedRect(cx - 6, BEACON_H - 93, 12, 5, 2);
+  g.fillStyle(0x4a4a56, 0.6);
+  g.fillRect(cx - 5, BEACON_H - 93, 10, 2);
+
+  // Red beacon light at the very top — the glowing warning lamp.
+  // Outer glow halo.
+  g.fillStyle(0x880000, 0.35);
+  g.fillCircle(cx, BEACON_H - 95, 6);
+  // Mid red.
+  g.fillStyle(0xcc1111, 1);
+  g.fillCircle(cx, BEACON_H - 95, 4);
+  // Bright core.
+  g.fillStyle(0xff4444, 1);
+  g.fillCircle(cx, BEACON_H - 95, 2.5);
+  // Specular highlight.
+  g.fillStyle(0xff9999, 0.8);
+  g.fillCircle(cx - 0.8, BEACON_H - 96, 1);
+
+  g.generateTexture(key, BEACON_W, BEACON_H);
+  g.destroy();
+  return { w: BEACON_W, h: BEACON_H };
+}
+
 // Generate everything; returns metadata the scene needs for sizing/bodies.
 export function generateTextures(scene) {
   const grassVariants = 4;
@@ -634,6 +728,9 @@ export function generateTextures(scene) {
   // Healing spring — a peaceful glowing pool on the south bank.
   const healingSpring = makeHealingSpringTexture(scene, 'healing-spring');
 
+  // Imperial beacon tower — tall dark spire on the north bank.
+  const beaconTower = makeBeaconTowerTexture(scene, 'beacon-tower');
+
   return {
     tile: TILE,
     grassVariants,
@@ -645,5 +742,6 @@ export function generateTextures(scene) {
     cave,
     well,
     healingSpring,
+    beaconTower,
   };
 }
