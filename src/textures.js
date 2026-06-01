@@ -788,6 +788,105 @@ function makeMeditationChamberTexture(scene, key) {
   return { w: MC_W, h: MC_H };
 }
 
+// --- Rune stone ------------------------------------------------------------
+// A dark ancient stone slab with glowing carved rune symbols — found deep in
+// the cave. The stone has a cold blue-green luminescence emanating from etched
+// runes. Purely decorative — no collision. Proximity triggers a cryptic message.
+const RUNE_W = 44;
+const RUNE_H = 52;
+
+function makeRuneStoneTexture(scene, key) {
+  const g = scene.make.graphics({ x: 0, y: 0, add: false });
+  const cx = RUNE_W / 2;
+  const cy = RUNE_H / 2 + 4;
+
+  // Ground shadow beneath the stone.
+  g.fillStyle(0x000000, 0.3);
+  g.fillEllipse(cx, RUNE_H - 5, 34, 10);
+
+  // Main stone body — dark basalt-like polygon, upright slab.
+  const stonePoly = [
+    6,  RUNE_H - 10,
+    4,  RUNE_H - 28,
+    8,  RUNE_H - 42,
+    cx, RUNE_H - 50,
+    cx + 10, RUNE_H - 44,
+    RUNE_W - 5, RUNE_H - 30,
+    RUNE_W - 6, RUNE_H - 10,
+  ];
+  g.fillStyle(0x1a1a22, 1);
+  g.fillPoints(toPoints(stonePoly), true);
+
+  // Slightly lighter left face (catching ambient light from above).
+  g.fillStyle(0x2a2a38, 1);
+  g.fillPoints(
+    toPoints([6, RUNE_H - 10, 4, RUNE_H - 28, 8, RUNE_H - 42, cx, RUNE_H - 50, cx - 2, RUNE_H - 30]),
+    true
+  );
+
+  // Stone outer edge highlight (sunlit top-left rim).
+  g.fillStyle(0x44445a, 0.7);
+  g.fillPoints(
+    toPoints([8, RUNE_H - 42, cx, RUNE_H - 50, cx - 2, RUNE_H - 42]),
+    true
+  );
+
+  // Glowing rune symbols — carved into the stone, lit with cold blue-green light.
+  // Each rune drawn as a simple geometric shape in glowing cyan/teal.
+  const glow = 0x44ffcc;
+  const glowDim = 0x229977;
+
+  // Rune 1 — a vertical line with two cross-bars (runic I/thorn shape).
+  g.lineStyle(1.5, glow, 0.9);
+  g.beginPath();
+  g.moveTo(cx - 2, RUNE_H - 38);
+  g.lineTo(cx - 2, RUNE_H - 22);
+  g.strokePath();
+  g.beginPath();
+  g.moveTo(cx - 2, RUNE_H - 34);
+  g.lineTo(cx + 5, RUNE_H - 30);
+  g.strokePath();
+  g.beginPath();
+  g.moveTo(cx - 2, RUNE_H - 28);
+  g.lineTo(cx + 4, RUNE_H - 25);
+  g.strokePath();
+
+  // Rune 2 — a diamond / lozenge shape above the first.
+  g.lineStyle(1, glow, 0.8);
+  g.beginPath();
+  g.moveTo(cx + 6, RUNE_H - 42);
+  g.lineTo(cx + 10, RUNE_H - 38);
+  g.lineTo(cx + 6, RUNE_H - 34);
+  g.lineTo(cx + 2, RUNE_H - 38);
+  g.closePath();
+  g.strokePath();
+
+  // Rune 3 — a branching fork (elder-futhark 'algiz' style).
+  g.lineStyle(1.5, glowDim, 0.85);
+  g.beginPath();
+  g.moveTo(cx - 8, RUNE_H - 18);
+  g.lineTo(cx - 8, RUNE_H - 30);
+  g.strokePath();
+  g.beginPath();
+  g.moveTo(cx - 8, RUNE_H - 26);
+  g.lineTo(cx - 12, RUNE_H - 30);
+  g.strokePath();
+  g.beginPath();
+  g.moveTo(cx - 8, RUNE_H - 26);
+  g.lineTo(cx - 4, RUNE_H - 30);
+  g.strokePath();
+
+  // Ambient glow halo behind the rune area — a diffuse cold light.
+  g.fillStyle(0x00ffcc, 0.06);
+  g.fillEllipse(cx, cy - 4, 28, 30);
+  g.fillStyle(0x22ddaa, 0.08);
+  g.fillEllipse(cx, cy - 2, 18, 20);
+
+  g.generateTexture(key, RUNE_W, RUNE_H);
+  g.destroy();
+  return { w: RUNE_W, h: RUNE_H };
+}
+
 // Generate everything; returns metadata the scene needs for sizing/bodies.
 export function generateTextures(scene) {
   const grassVariants = 4;
@@ -819,6 +918,9 @@ export function generateTextures(scene) {
   // Sith meditation chamber — dark stone platform with red glow, north bank.
   const meditationChamber = makeMeditationChamberTexture(scene, 'meditation-chamber');
 
+  // Ancient rune stone — glowing stone slab inside the cave with cryptic runes.
+  const runeStone = makeRuneStoneTexture(scene, 'rune-stone');
+
   return {
     tile: TILE,
     grassVariants,
@@ -832,5 +934,6 @@ export function generateTextures(scene) {
     healingSpring,
     beaconTower,
     meditationChamber,
+    runeStone,
   };
 }

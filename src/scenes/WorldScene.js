@@ -133,6 +133,40 @@ export default class WorldScene extends Phaser.Scene {
     const mcY = Math.round(this.worldH * 0.12);
     this.add.image(mcX, mcY, 'meditation-chamber').setOrigin(0.5, 0.5).setDepth(mcY + meta.meditationChamber.h / 2);
 
+    // --- Ancient rune stone (inside cave, ~75%, 24%) -----------------------
+    // A glowing rune-covered slab deep in the cave. Pulsing with cold light.
+    // When the player stands within 2 tiles (~96px), a cryptic message appears.
+    const rsX = Math.round(this.worldW * 0.75);
+    const rsY = Math.round(this.worldH * 0.24);
+    this._runeStoneX = rsX;
+    this._runeStoneY = rsY;
+    this._runeStoneSprite = this.add
+      .image(rsX, rsY, 'rune-stone')
+      .setOrigin(0.5, 0.5)
+      .setDepth(rsY + meta.runeStone.h / 2);
+
+    // Cryptic message overlay — camera-fixed, shown when player is near the stone.
+    this._runeMsgVisible = false;
+    this._runeMsgBg = this.add.graphics();
+    this._runeMsgBg.setScrollFactor(0);
+    this._runeMsgBg.setDepth(10001);
+    this._runeMsgBg.setAlpha(0);
+
+    this._runeMsgText = this.add
+      .text(0, 0, 'THE PATH UNSEEN IS THE TRUEST WAY', {
+        fontFamily: '"Palatino Linotype", Palatino, serif',
+        fontSize: '15px',
+        color: '#88ffdd',
+        stroke: '#001a0e',
+        strokeThickness: 4,
+        align: 'center',
+        wordWrap: { width: 280 },
+      })
+      .setOrigin(0.5, 0.5)
+      .setScrollFactor(0)
+      .setDepth(10002)
+      .setAlpha(0);
+
     // --- Player -------------------------------------------------------------
     const spawn = this.findClearSpawn(placements, T);
     this.player = this.physics.add.sprite(spawn.x, spawn.y, 'player-down');
@@ -622,6 +656,52 @@ export default class WorldScene extends Phaser.Scene {
         this.cameras.main.width,
         this.cameras.main.height
       );
+    }
+
+    // Rune stone glow pulse — a slow sine-wave tint cycle on the stone sprite.
+    // Alternates between pale cyan-white and the base sprite color.
+    const pulse = 0.6 + 0.4 * Math.sin(time * 0.002);
+    const glowTint = Phaser.Display.Color.GetColor(
+      Math.round(68 + pulse * 100),   // R: 68–168
+      Math.round(220 + pulse * 35),   // G: 220–255
+      Math.round(180 + pulse * 75)    // B: 180–255
+    );
+    this._runeStoneSprite.setTint(glowTint);
+
+    // Rune stone proximity: show/hide cryptic message within ~96px (2 tiles).
+    const RUNE_TRIGGER_DIST = 96;
+    const runeDist = Phaser.Math.Distance.Between(
+      this.player.x, this.player.y, this._runeStoneX, this._runeStoneY
+    );
+    const nearRune = runeDist < RUNE_TRIGGER_DIST;
+
+    if (nearRune !== this._runeMsgVisible) {
+      this._runeMsgVisible = nearRune;
+      const targetAlpha = nearRune ? 1 : 0;
+      this.tweens.add({
+        targets: [this._runeMsgBg, this._runeMsgText],
+        alpha: targetAlpha,
+        duration: 400,
+        ease: 'Sine.easeInOut',
+      });
+
+      if (nearRune) {
+        // Position the message panel at the bottom-center of the viewport.
+        const camW = this.cameras.main.width;
+        const camH = this.cameras.main.height;
+        const panelW = 320;
+        const panelH = 64;
+        const px = camW / 2;
+        const py = camH - 60;
+
+        this._runeMsgBg.clear();
+        this._runeMsgBg.fillStyle(0x000000, 0.72);
+        this._runeMsgBg.strokeRect(px - panelW / 2 - 1, py - panelH / 2 - 1, panelW + 2, panelH + 2);
+        this._runeMsgBg.fillRoundedRect(px - panelW / 2, py - panelH / 2, panelW, panelH, 6);
+        this._runeMsgBg.lineStyle(1, 0x44ffcc, 0.5);
+        this._runeMsgBg.strokeRoundedRect(px - panelW / 2, py - panelH / 2, panelW, panelH, 6);
+        this._runeMsgText.setPosition(px, py);
+      }
     }
   }
 }
