@@ -71,7 +71,7 @@ POST /quit        → shuts down the agent server cleanly
 | Stone bridge   | River tiles x=22–24 (~68%, 25%)| Crossable gap in the river — leads to the cave       |
 | River          | Rows 6–8 (full width)           | Blocks movement everywhere except the stone bridge   |
 | Healing spring | South-east quadrant (~65%, 72%) | Glowing teal pool ringed by stones and flower petals |
-| Beacon tower   | North bank (~30%, 15%)          | Tall dark spire with red light at the summit         |
+| Imperial beacon tower | North bank (~30%, 15%) | Tall black spire with blinking red light — marks the seat of power |
 
 ## Tips for agents
 - Look at each screenshot and figure out what you're seeing — trust your own observation.
