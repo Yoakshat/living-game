@@ -73,6 +73,7 @@ POST /quit        → shuts down the agent server cleanly
 | Healing spring | South-east quadrant (~65%, 72%) | Glowing teal pool ringed by stones and flower petals |
 | Imperial beacon tower | North bank (~30%, 15%) | Tall black spire with blinking red light — marks the seat of power |
 | Meditation chamber | North bank (~55%, 12%)          | Dark stone platform with red glow — a place of silent power |
+| Rune stone         | Inside cave (~75%, 24%)         | Glowing ancient slab with cyan runes; stand within 2 tiles to reveal a cryptic message |
 
 ## Tips for agents
 - Look at each screenshot and figure out what you're seeing — trust your own observation.
