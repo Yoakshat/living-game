@@ -127,6 +127,12 @@ export default class WorldScene extends Phaser.Scene {
     const btY = Math.round(this.worldH * 0.15);
     this.add.image(btX, btY, 'beacon-tower').setOrigin(0.5, 0.5).setDepth(btY + meta.beaconTower.h / 2);
 
+    // --- Sith meditation chamber (north bank, ~55%, 12%) ---------------------
+    // A dark circular stone platform with a faint red glow — a place of silent power.
+    const mcX = Math.round(this.worldW * 0.55);
+    const mcY = Math.round(this.worldH * 0.12);
+    this.add.image(mcX, mcY, 'meditation-chamber').setOrigin(0.5, 0.5).setDepth(mcY + meta.meditationChamber.h / 2);
+
     // --- Player -------------------------------------------------------------
     const spawn = this.findClearSpawn(placements, T);
     this.player = this.physics.add.sprite(spawn.x, spawn.y, 'player-down');

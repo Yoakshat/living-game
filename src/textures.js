@@ -703,6 +703,91 @@ function makeBeaconTowerTexture(scene, key) {
   return { w: BEACON_W, h: BEACON_H };
 }
 
+// --- Sith meditation chamber -----------------------------------------------
+// A dark circular stone platform on the north bank — a place of silent power.
+// Cracked dark stone, concentric ring details, radial cracks, faint red glow,
+// and a bright red core point. Purely decorative — no collision.
+const MC_W = 80;
+const MC_H = 80;
+
+function makeMeditationChamberTexture(scene, key) {
+  const g = scene.make.graphics({ x: 0, y: 0, add: false });
+  const cx = MC_W / 2;
+  const cy = MC_H / 2;
+
+  // Ground shadow ellipse beneath the platform.
+  g.fillStyle(0x000000, 0.25);
+  g.fillEllipse(cx, cy + 14, 68, 16);
+
+  // Dark outer vignette ring — darkens the platform edge.
+  g.fillStyle(0x000000, 0.35);
+  g.fillCircle(cx, cy, 36);
+
+  // Main stone platform — dark grey filled circle, radius ~32.
+  g.fillStyle(0x2a2a2e, 1);
+  g.fillCircle(cx, cy, 32);
+
+  // Stone floor details: concentric rings in slightly lighter grey.
+  g.lineStyle(1.5, 0x3a3a42, 0.7);
+  g.strokeCircle(cx, cy, 26);
+  g.lineStyle(1, 0x363640, 0.55);
+  g.strokeCircle(cx, cy, 19);
+  g.lineStyle(1, 0x323238, 0.45);
+  g.strokeCircle(cx, cy, 13);
+
+  // Stone platform outer edge highlight.
+  g.lineStyle(2, 0x404048, 0.8);
+  g.strokeCircle(cx, cy, 32);
+
+  // Radial crack lines from center outward.
+  g.lineStyle(1, 0x141418, 0.85);
+  // Crack 1 — northwest.
+  g.beginPath();
+  g.moveTo(cx, cy);
+  g.lineTo(cx - 20, cy - 16);
+  g.strokePath();
+  // Crack 2 — northeast.
+  g.beginPath();
+  g.moveTo(cx, cy);
+  g.lineTo(cx + 18, cy - 14);
+  g.strokePath();
+  // Crack 3 — south.
+  g.beginPath();
+  g.moveTo(cx, cy);
+  g.lineTo(cx + 4, cy + 22);
+  g.strokePath();
+  // Crack 4 — east.
+  g.beginPath();
+  g.moveTo(cx, cy);
+  g.lineTo(cx + 24, cy + 5);
+  g.strokePath();
+  // Crack 5 — southwest.
+  g.beginPath();
+  g.moveTo(cx, cy);
+  g.lineTo(cx - 16, cy + 18);
+  g.strokePath();
+
+  // Faint red circular glow in the center — semi-transparent, low alpha ~0.3.
+  g.fillStyle(0x880000, 0.18);
+  g.fillEllipse(cx, cy, 40, 38);
+  g.fillStyle(0xaa0000, 0.22);
+  g.fillEllipse(cx, cy, 26, 25);
+  g.fillStyle(0xcc1111, 0.28);
+  g.fillEllipse(cx, cy, 16, 15);
+
+  // Bright red core point at the center — small bright red circle.
+  g.fillStyle(0x990000, 0.9);
+  g.fillCircle(cx, cy, 5);
+  g.fillStyle(0xee2222, 1);
+  g.fillCircle(cx, cy, 3);
+  g.fillStyle(0xff6666, 0.85);
+  g.fillCircle(cx - 0.8, cy - 0.8, 1.2);
+
+  g.generateTexture(key, MC_W, MC_H);
+  g.destroy();
+  return { w: MC_W, h: MC_H };
+}
+
 // Generate everything; returns metadata the scene needs for sizing/bodies.
 export function generateTextures(scene) {
   const grassVariants = 4;
@@ -731,6 +816,9 @@ export function generateTextures(scene) {
   // Imperial beacon tower — tall dark spire on the north bank.
   const beaconTower = makeBeaconTowerTexture(scene, 'beacon-tower');
 
+  // Sith meditation chamber — dark stone platform with red glow, north bank.
+  const meditationChamber = makeMeditationChamberTexture(scene, 'meditation-chamber');
+
   return {
     tile: TILE,
     grassVariants,
@@ -743,5 +831,6 @@ export function generateTextures(scene) {
     well,
     healingSpring,
     beaconTower,
+    meditationChamber,
   };
 }
