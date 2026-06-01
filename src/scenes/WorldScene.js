@@ -121,6 +121,12 @@ export default class WorldScene extends Phaser.Scene {
       .setOrigin(0.5, 0.5)
       .setDepth(springY + meta.healingSpring.h / 2);
 
+    // --- Imperial beacon tower (north bank, ~30%, 15%) -----------------------
+    // A tall dark spire marking the seat of Imperial power — purely decorative.
+    const btX = Math.round(this.worldW * 0.30);
+    const btY = Math.round(this.worldH * 0.15);
+    this.add.image(btX, btY, 'beacon-tower').setOrigin(0.5, 0.5).setDepth(btY + meta.beaconTower.h / 2);
+
     // --- Player -------------------------------------------------------------
     const spawn = this.findClearSpawn(placements, T);
     this.player = this.physics.add.sprite(spawn.x, spawn.y, 'player-down');
