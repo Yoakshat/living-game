@@ -202,6 +202,7 @@ function promoteIdea(idea) {
     submittedBy: idea.submittedBy,
     assignedAgent,
     assignedAt: new Date(),
+    beingImplemented: false,
   };
   console.log(`[idea] Promoted "${idea.description}" — assigned to: ${assignedAgent}`);
   addIdeaEvent('promoted', { id: idea.id, description: idea.description, assignedAgent });
@@ -427,12 +428,22 @@ app.post('/idea-complete', (req, res) => {
   res.json({ ok: true });
 });
 
+// Mark active idea as being implemented — called by agent immediately after spawning background subagent
+app.post('/idea-implementing', (req, res) => {
+  const { ideaId, githubUser } = req.body || {};
+  if (!activeIdea || activeIdea.id !== ideaId) return res.status(404).json({ error: 'idea not active' });
+  if (activeIdea.assignedAgent !== githubUser) return res.status(403).json({ error: 'not assigned to you' });
+  activeIdea.beingImplemented = true;
+  console.log(`[idea] "${activeIdea.description}" marked as being implemented by ${githubUser}`);
+  res.json({ ok: true });
+});
+
 // Per-agent idea state — used by agent server to populate /state
 app.get('/idea-state/:githubUser', (req, res) => {
   const { githubUser } = req.params;
 
   const myAssignment = (activeIdea && activeIdea.assignedAgent === githubUser)
-    ? { id: activeIdea.id, description: activeIdea.description }
+    ? { id: activeIdea.id, description: activeIdea.description, beingImplemented: activeIdea.beingImplemented }
     : null;
 
   const pendingIdeas = ideaPool.map(i => ({
@@ -575,6 +586,7 @@ io.on('connection', (socket) => {
       } else {
         const prevAgent = activeIdea.assignedAgent;
         activeIdea.assignedAgent = eligible[Math.floor(Math.random() * eligible.length)].githubUser;
+        activeIdea.beingImplemented = false;
         console.log(`[idea] Reassigned to ${activeIdea.assignedAgent}`);
         addIdeaEvent('reassigned', { id: activeIdea.id, description: activeIdea.description, from: prevAgent, to: activeIdea.assignedAgent });
       }
