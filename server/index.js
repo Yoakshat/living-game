@@ -34,6 +34,80 @@ function saveProfilesToDisk() {
   }
 }
 
+// --- Idea history persistence ------------------------------------------------
+const IDEA_HISTORY_PATH = pathMod.join(__dirname, 'idea-history.json');
+const IDEA_HISTORY_MAX = 500;
+const ideaHistory = [];
+
+// Load idea-history.json into memory on startup (survives Railway restarts)
+(function loadIdeaHistory() {
+  try {
+    if (fsSync.existsSync(IDEA_HISTORY_PATH)) {
+      const raw = fsSync.readFileSync(IDEA_HISTORY_PATH, 'utf8');
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) {
+        ideaHistory.push(...arr);
+        console.log(`[idea-history] Loaded ${ideaHistory.length} event(s) from idea-history.json`);
+      }
+    }
+  } catch (err) {
+    console.warn(`[idea-history] Could not load idea-history.json: ${err.message}`);
+  }
+})();
+
+function saveIdeaHistoryToDisk() {
+  try {
+    fsSync.writeFileSync(IDEA_HISTORY_PATH, JSON.stringify(ideaHistory, null, 2), 'utf8');
+  } catch (err) {
+    console.warn(`[idea-history] Could not write idea-history.json: ${err.message}`);
+  }
+}
+
+function addIdeaEvent(eventType, payload) {
+  const entry = { eventType, timestamp: new Date().toISOString(), ...payload };
+  ideaHistory.push(entry);
+  // Cap at IDEA_HISTORY_MAX entries — discard oldest
+  while (ideaHistory.length > IDEA_HISTORY_MAX) ideaHistory.shift();
+  saveIdeaHistoryToDisk();
+
+  // Build human-readable log message
+  let actorField;
+  let humanMessage;
+  const { submittedBy, voter, assignedAgent, description, totalVotes, from, to } = payload;
+
+  switch (eventType) {
+    case 'submitted':
+      actorField = submittedBy;
+      humanMessage = `${submittedBy} proposed: ${description}`;
+      break;
+    case 'voted':
+      actorField = voter;
+      humanMessage = `${voter} voted: ${description} (${totalVotes} vote(s))`;
+      break;
+    case 'promoted':
+      actorField = assignedAgent;
+      humanMessage = `'${description}' promoted — assigned to ${assignedAgent}`;
+      break;
+    case 'discarded':
+      actorField = submittedBy || null;
+      humanMessage = `'${description}' timed out and was discarded`;
+      break;
+    case 'completed':
+      actorField = submittedBy;
+      humanMessage = `'${description}' merged! Credit to ${submittedBy}`;
+      break;
+    case 'reassigned':
+      actorField = to;
+      humanMessage = `Idea reassigned from ${from} to ${to}`;
+      break;
+    default:
+      actorField = null;
+      humanMessage = `Idea event: ${eventType}`;
+  }
+
+  addLogEntry('idea', actorField, humanMessage);
+}
+
 function generateId() {
   return crypto.randomUUID();
 }
@@ -128,13 +202,16 @@ function promoteIdea(idea) {
     submittedBy: idea.submittedBy,
     assignedAgent,
     assignedAt: new Date(),
+    beingImplemented: false,
   };
   console.log(`[idea] Promoted "${idea.description}" — assigned to: ${assignedAgent}`);
+  addIdeaEvent('promoted', { id: idea.id, description: idea.description, assignedAgent });
 
   // 30-min discard timer
   discardTimer = setTimeout(() => {
     if (activeIdea && activeIdea.id === idea.id) {
       console.log(`[idea] 30-min timeout — discarding "${idea.description}"`);
+      addIdeaEvent('discarded', { id: idea.id, description: idea.description, reason: 'timeout' });
       activeIdea = null;
       advanceQueue();
     }
@@ -221,6 +298,11 @@ app.get('/log', (_req, res) => {
   res.json(last50);
 });
 
+// Idea history — full persisted lifecycle events
+app.get('/idea-history', (_req, res) => {
+  res.json(ideaHistory);
+});
+
 // External event push (e.g. governance workflow posts PR merges here)
 app.post('/log-event', (req, res) => {
   const { type, player, message } = req.body || {};
@@ -276,6 +358,7 @@ app.post('/submit-idea', (req, res) => {
   };
   ideaPool.push(idea);
   console.log(`[idea] New idea submitted by ${submittedBy}: "${description}" (id: ${idea.id})`);
+  addIdeaEvent('submitted', { id: idea.id, description, submittedBy });
   res.json({ ideaId: idea.id });
 });
 
@@ -302,6 +385,7 @@ app.post('/vote-idea', (req, res) => {
 
   idea.votes.push(githubUser);
   console.log(`[idea] ${githubUser} voted on "${idea.description}" — ${idea.votes.length} vote(s)`);
+  addIdeaEvent('voted', { id: idea.id, description: idea.description, voter: githubUser, totalVotes: idea.votes.length });
 
   // Check quorum: promote if threshold reached and no active idea
   if (idea.votes.length >= getQuorum() && !activeIdea) {
@@ -330,6 +414,7 @@ app.post('/idea-complete', (req, res) => {
   const submittedBy = activeIdea.submittedBy;
   ideasMerged.set(submittedBy, (ideasMerged.get(submittedBy) || 0) + 1);
   console.log(`[idea] Idea "${activeIdea.description}" complete — credit to ${submittedBy} (total: ${ideasMerged.get(submittedBy)})`);
+  addIdeaEvent('completed', { id: ideaId, description: activeIdea.description, submittedBy: activeIdea.submittedBy });
 
   // Remove from pool if still there (shouldn't be, but defensive)
   const idx = ideaPool.findIndex(i => i.id === ideaId);
@@ -343,12 +428,22 @@ app.post('/idea-complete', (req, res) => {
   res.json({ ok: true });
 });
 
+// Mark active idea as being implemented — called by agent immediately after spawning background subagent
+app.post('/idea-implementing', (req, res) => {
+  const { ideaId, githubUser } = req.body || {};
+  if (!activeIdea || activeIdea.id !== ideaId) return res.status(404).json({ error: 'idea not active' });
+  if (activeIdea.assignedAgent !== githubUser) return res.status(403).json({ error: 'not assigned to you' });
+  activeIdea.beingImplemented = true;
+  console.log(`[idea] "${activeIdea.description}" marked as being implemented by ${githubUser}`);
+  res.json({ ok: true });
+});
+
 // Per-agent idea state — used by agent server to populate /state
 app.get('/idea-state/:githubUser', (req, res) => {
   const { githubUser } = req.params;
 
   const myAssignment = (activeIdea && activeIdea.assignedAgent === githubUser)
-    ? { id: activeIdea.id, description: activeIdea.description }
+    ? { id: activeIdea.id, description: activeIdea.description, beingImplemented: activeIdea.beingImplemented }
     : null;
 
   const pendingIdeas = ideaPool.map(i => ({
@@ -485,11 +580,15 @@ io.on('connection', (socket) => {
       if (eligible.length === 0) {
         console.log(`[idea] No agents left to reassign — discarding idea`);
         clearTimeout(discardTimer);
+        addIdeaEvent('discarded', { id: activeIdea.id, description: activeIdea.description, reason: 'no-agents' });
         activeIdea = null;
         advanceQueue();
       } else {
+        const prevAgent = activeIdea.assignedAgent;
         activeIdea.assignedAgent = eligible[Math.floor(Math.random() * eligible.length)].githubUser;
+        activeIdea.beingImplemented = false;
         console.log(`[idea] Reassigned to ${activeIdea.assignedAgent}`);
+        addIdeaEvent('reassigned', { id: activeIdea.id, description: activeIdea.description, from: prevAgent, to: activeIdea.assignedAgent });
       }
     }
   });
