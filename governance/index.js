@@ -38,6 +38,91 @@ async function getCIStatus(sha) {
   return 'success';
 }
 
+async function autoResolveConflict(pr) {
+  try {
+    const files = await ghFetch(`/pulls/${pr.number}/files`);
+    for (const file of files) {
+      const path = file.filename;
+      let prContent, mainContent, mainSha;
+      try {
+        const prFile = await ghFetch(`/contents/${path}?ref=${encodeURIComponent(pr.head.ref)}`);
+        prContent = Buffer.from(prFile.content, 'base64').toString('utf8');
+      } catch (err) {
+        log(`autoResolveConflict: could not fetch PR version of ${path}: ${err.message}`);
+        return false;
+      }
+      try {
+        const mainFile = await ghFetch(`/contents/${path}?ref=main`);
+        mainContent = Buffer.from(mainFile.content, 'base64').toString('utf8');
+        mainSha = mainFile.sha;
+      } catch (err) {
+        log(`autoResolveConflict: could not fetch main version of ${path}: ${err.message}`);
+        return false;
+      }
+
+      // Call DeepSeek to merge the two versions
+      let mergedContent;
+      try {
+        const dsRes = await fetch('https://api.deepseek.com/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'deepseek-chat',
+            messages: [
+              {
+                role: 'system',
+                content: 'You are a code merge expert. Given two versions of a file, produce a clean merge that preserves both changes. Return ONLY the merged file content with no explanation, no markdown fences, no commentary.',
+              },
+              {
+                role: 'user',
+                content: `PR branch version:\n\n${prContent}\n\n---\n\nmain branch version:\n\n${mainContent}\n\nMerge these, keeping both changes. Return only the merged file.`,
+              },
+            ],
+            temperature: 0,
+          }),
+          signal: AbortSignal.timeout(60000),
+        });
+        if (!dsRes.ok) {
+          const errText = await dsRes.text();
+          log(`autoResolveConflict: DeepSeek error for ${path}: ${dsRes.status} ${errText}`);
+          return false;
+        }
+        const dsData = await dsRes.json();
+        mergedContent = dsData.choices[0].message.content;
+      } catch (err) {
+        log(`autoResolveConflict: DeepSeek call failed for ${path}: ${err.message}`);
+        return false;
+      }
+
+      // Push merged content back to the PR branch
+      try {
+        const encodedContent = Buffer.from(mergedContent).toString('base64');
+        await ghFetch(`/contents/${path}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: `Auto-resolve conflict in ${path}`,
+            content: encodedContent,
+            sha: mainSha,
+            branch: pr.head.ref,
+          }),
+        });
+        log(`autoResolveConflict: resolved ${path}`);
+      } catch (err) {
+        log(`autoResolveConflict: could not push merged ${path}: ${err.message}`);
+        return false;
+      }
+    }
+    return true;
+  } catch (err) {
+    log(`autoResolveConflict: unexpected error: ${err.message}`);
+    return false;
+  }
+}
+
 async function govern() {
   // 1. Fetch active idea from game server
   let activeIdea;
@@ -102,9 +187,30 @@ async function govern() {
         });
         log(`PR #${num} merged`);
       } catch (err) {
-        log(`PR #${num} merge failed: ${err.message}`);
-        winner = null;
-        continue;
+        const isConflict = err.message.includes('405') || err.message.toLowerCase().includes('conflict');
+        if (isConflict && process.env.DEEPSEEK_API_KEY) {
+          log(`PR #${num} has a merge conflict — attempting auto-resolve with DeepSeek`);
+          const resolved = await autoResolveConflict(pr);
+          if (resolved) {
+            log(`PR #${num} conflicts resolved — retrying merge`);
+            try {
+              await ghFetch(`/pulls/${num}/merge`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ merge_method: 'squash', commit_title: pr.title }) });
+              log(`PR #${num} merged after conflict resolution`);
+            } catch (retryErr) {
+              log(`PR #${num} retry merge failed: ${retryErr.message}`);
+              winner = null;
+              continue;
+            }
+          } else {
+            log(`PR #${num} could not auto-resolve conflicts — skipping`);
+            winner = null;
+            continue;
+          }
+        } else {
+          log(`PR #${num} merge failed: ${err.message}`);
+          winner = null;
+          continue;
+        }
       }
       // Notify game server
       try {
@@ -148,5 +254,6 @@ const healthServer = http.createServer((_req, res) => {
 });
 healthServer.listen(process.env.PORT || 4000, () => {
   log(`Governance service started — polling every ${POLL_MS / 1000}s`);
+  if (!process.env.DEEPSEEK_API_KEY) log('[warn] DEEPSEEK_API_KEY not set — conflict auto-resolution disabled');
   loop();
 });
