@@ -887,6 +887,186 @@ function makeRuneStoneTexture(scene, key) {
   return { w: RUNE_W, h: RUNE_H };
 }
 
+// --- Ruined stone arch -------------------------------------------------------
+// A weathered arch of ancient stones, half-swallowed by vines and moss. Two
+// crumbling pillars support a broken capstone — the mark of a lost civilization.
+// Found deep in the far northwest corner. Purely decorative — no collision.
+const ARCH_W = 88;
+const ARCH_H = 96;
+
+function makeStoneArchTexture(scene, key) {
+  const g = scene.make.graphics({ x: 0, y: 0, add: false });
+  const cx = ARCH_W / 2;
+
+  // Ground shadow — wide ellipse under the whole structure.
+  g.fillStyle(0x000000, 0.28);
+  g.fillEllipse(cx, ARCH_H - 8, 72, 16);
+
+  // --- Left pillar -----------------------------------------------------------
+  const pillarW = 14;
+  const pillarH = 58;
+  const pillarLX = cx - 28;
+  const pillarRX = cx + 14;
+  const pillarY = ARCH_H - 20 - pillarH;
+
+  // Left pillar — base stone (dark, mossy).
+  g.fillStyle(0x4a4a40, 1);
+  g.fillRoundedRect(pillarLX, pillarY, pillarW, pillarH, 2);
+  // Left pillar — highlight (lit from upper-left).
+  g.fillStyle(0x6e6e60, 0.8);
+  g.fillRect(pillarLX + 1, pillarY + 2, 4, pillarH - 4);
+  // Left pillar — shadow side.
+  g.fillStyle(0x2c2c24, 0.9);
+  g.fillRect(pillarLX + pillarW - 4, pillarY + 2, 4, pillarH - 4);
+  // Horizontal stone-course lines on the left pillar.
+  g.lineStyle(1, 0x38382e, 0.65);
+  for (let i = 1; i < 5; i++) {
+    const ly = pillarY + (pillarH * i) / 5;
+    g.beginPath();
+    g.moveTo(pillarLX, ly);
+    g.lineTo(pillarLX + pillarW, ly);
+    g.strokePath();
+  }
+
+  // --- Right pillar ----------------------------------------------------------
+  g.fillStyle(0x4a4a40, 1);
+  g.fillRoundedRect(pillarRX, pillarY + 8, pillarW, pillarH - 8, 2);
+  g.fillStyle(0x6e6e60, 0.8);
+  g.fillRect(pillarRX + 1, pillarY + 10, 4, pillarH - 12);
+  g.fillStyle(0x2c2c24, 0.9);
+  g.fillRect(pillarRX + pillarW - 4, pillarY + 10, 4, pillarH - 12);
+  g.lineStyle(1, 0x38382e, 0.65);
+  for (let i = 1; i < 4; i++) {
+    const ly = (pillarY + 8) + ((pillarH - 8) * i) / 4;
+    g.beginPath();
+    g.moveTo(pillarRX, ly);
+    g.lineTo(pillarRX + pillarW, ly);
+    g.strokePath();
+  }
+
+  // --- Broken capstone (arch lintel) ----------------------------------------
+  // Sits on top of both pillars; cracked in the middle with a missing chunk.
+  const capY = pillarY - 4;
+  const capH = 14;
+
+  // Left half of capstone.
+  g.fillStyle(0x555548, 1);
+  g.fillRoundedRect(pillarLX - 2, capY, pillarW + 12, capH, 2);
+  g.fillStyle(0x7a7a68, 0.7);
+  g.fillRect(pillarLX - 1, capY + 1, pillarW + 10, 4);
+  g.fillStyle(0x2e2e26, 0.8);
+  g.fillRect(pillarLX - 1, capY + capH - 4, pillarW + 10, 4);
+
+  // Right half of capstone (slightly lower — the arch has settled).
+  g.fillStyle(0x505044, 1);
+  g.fillRoundedRect(pillarRX - 4, capY + 5, pillarW + 8, capH - 2, 2);
+  g.fillStyle(0x747464, 0.7);
+  g.fillRect(pillarRX - 3, capY + 6, pillarW + 6, 3);
+
+  // Central crack in the lintel — a dark jagged gap.
+  g.fillStyle(0x181810, 1);
+  g.fillTriangle(
+    cx - 4, capY,
+    cx + 3, capY,
+    cx,     capY + capH + 2
+  );
+
+  // --- Collapsed stone at the base (fallen rubble) --------------------------
+  // A few irregular stone chunks at the base of the right pillar.
+  const rubble = [
+    { x: pillarRX + 12, y: ARCH_H - 22, w: 14, h: 9 },
+    { x: pillarRX + 18, y: ARCH_H - 16, w: 10, h: 7 },
+    { x: pillarLX - 10, y: ARCH_H - 18, w: 12, h: 8 },
+  ];
+  for (const r of rubble) {
+    g.fillStyle(0x484840, 1);
+    g.fillRoundedRect(r.x, r.y, r.w, r.h, 2);
+    g.fillStyle(0x686858, 0.6);
+    g.fillRect(r.x + 1, r.y + 1, r.w - 3, 3);
+  }
+
+  // --- Stone bases / footings ------------------------------------------------
+  g.fillStyle(0x3c3c34, 1);
+  g.fillRoundedRect(pillarLX - 4, ARCH_H - 22, pillarW + 8, 10, 2);
+  g.fillRoundedRect(pillarRX - 3, ARCH_H - 18, pillarW + 6, 8, 2);
+  g.fillStyle(0x585848, 0.6);
+  g.fillRect(pillarLX - 3, ARCH_H - 22, pillarW + 6, 3);
+  g.fillRect(pillarRX - 2, ARCH_H - 18, pillarW + 4, 3);
+
+  // --- Vines and moss --------------------------------------------------------
+  // Trailing vine lines down the left pillar.
+  g.lineStyle(2, 0x2e6e28, 0.75);
+  g.beginPath();
+  g.moveTo(pillarLX + 3, pillarY + 4);
+  g.lineTo(pillarLX + 5, pillarY + 18);
+  g.lineTo(pillarLX + 2, pillarY + 32);
+  g.lineTo(pillarLX + 6, pillarY + 46);
+  g.strokePath();
+  g.lineStyle(1.5, 0x3a8830, 0.65);
+  g.beginPath();
+  g.moveTo(pillarLX + 10, pillarY + 8);
+  g.lineTo(pillarLX + 8, pillarY + 22);
+  g.lineTo(pillarLX + 11, pillarY + 38);
+  g.strokePath();
+
+  // Vine on the right pillar.
+  g.lineStyle(2, 0x2e6e28, 0.7);
+  g.beginPath();
+  g.moveTo(pillarRX + 4, pillarY + 14);
+  g.lineTo(pillarRX + 6, pillarY + 28);
+  g.lineTo(pillarRX + 3, pillarY + 42);
+  g.strokePath();
+
+  // Vine leaves — tiny ellipses along the vine paths.
+  const leafPositions = [
+    { x: pillarLX + 4, y: pillarY + 14 },
+    { x: pillarLX + 3, y: pillarY + 28 },
+    { x: pillarLX + 7, y: pillarY + 42 },
+    { x: pillarLX + 9, y: pillarY + 20 },
+    { x: pillarRX + 5, y: pillarY + 22 },
+    { x: pillarRX + 4, y: pillarY + 36 },
+    // A few leaves on the capstone.
+    { x: cx - 8, y: capY - 3 },
+    { x: cx + 5, y: capY - 2 },
+  ];
+  for (const lp of leafPositions) {
+    g.fillStyle(0x3a8030, 0.88);
+    g.fillEllipse(lp.x, lp.y, 7, 5);
+    g.fillStyle(0x55aa44, 0.5);
+    g.fillEllipse(lp.x - 1, lp.y - 1, 3, 2);
+  }
+
+  // Moss patches on the stone surfaces — soft green blotches.
+  const mossSpots = [
+    { x: pillarLX + 5, y: pillarY + 50, rx: 6, ry: 4 },
+    { x: pillarLX + 2, y: pillarY + 38, rx: 4, ry: 3 },
+    { x: pillarRX + 8, y: pillarY + 30, rx: 5, ry: 3 },
+    { x: cx - 6, y: capY + 8, rx: 7, ry: 3 },
+    { x: pillarRX + 3, y: ARCH_H - 15, rx: 5, ry: 3 },
+  ];
+  for (const m of mossSpots) {
+    g.fillStyle(0x4a7c3a, 0.45);
+    g.fillEllipse(m.x, m.y, m.rx * 2, m.ry * 2);
+    g.fillStyle(0x6aaa52, 0.3);
+    g.fillEllipse(m.x - 1, m.y - 1, m.rx, m.ry);
+  }
+
+  // --- Ancient engravings on the arch face (faint, weathered) ---------------
+  g.lineStyle(1, 0x7a7060, 0.35);
+  // A simple knotwork spiral on the left pillar face.
+  g.beginPath();
+  g.moveTo(pillarLX + 6, pillarY + pillarH * 0.55);
+  g.lineTo(pillarLX + 8, pillarY + pillarH * 0.48);
+  g.lineTo(pillarLX + 11, pillarY + pillarH * 0.52);
+  g.lineTo(pillarLX + 9, pillarY + pillarH * 0.60);
+  g.lineTo(pillarLX + 6, pillarY + pillarH * 0.58);
+  g.strokePath();
+
+  g.generateTexture(key, ARCH_W, ARCH_H);
+  g.destroy();
+  return { w: ARCH_W, h: ARCH_H };
+}
+
 // Generate everything; returns metadata the scene needs for sizing/bodies.
 export function generateTextures(scene) {
   const grassVariants = 4;
@@ -921,6 +1101,9 @@ export function generateTextures(scene) {
   // Ancient rune stone — glowing stone slab inside the cave with cryptic runes.
   const runeStone = makeRuneStoneTexture(scene, 'rune-stone');
 
+  // Ruined stone arch — ancient overgrown remnant in the far northwest corner.
+  const stoneArch = makeStoneArchTexture(scene, 'stone-arch');
+
   return {
     tile: TILE,
     grassVariants,
@@ -935,5 +1118,6 @@ export function generateTextures(scene) {
     beaconTower,
     meditationChamber,
     runeStone,
+    stoneArch,
   };
 }
