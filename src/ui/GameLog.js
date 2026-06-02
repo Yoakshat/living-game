@@ -6,7 +6,6 @@
  * the camera scrolls. pointer-events: none ensures it never blocks game input.
  */
 
-const MAX_VISIBLE = 9;      // entries shown at once
 const POLL_INTERVAL = 5000; // ms between server fetches
 
 export class GameLog {
@@ -32,14 +31,15 @@ export class GameLog {
       bottom:         '12px',
       right:          '12px',
       width:          '300px',
-      maxHeight:      '180px',
+      maxHeight:      '240px',
       background:     'rgba(0,0,0,0.68)',
       borderRadius:   '6px',
       padding:        '8px',
       boxSizing:      'border-box',
-      overflow:       'hidden',
+      overflowY:      'auto',
+      overflowX:      'hidden',
       zIndex:         '9999',
-      pointerEvents:  'none',
+      pointerEvents:  'auto',
       fontFamily:     'monospace, monospace',
       fontSize:       '11px',
       lineHeight:     '1.4',
@@ -85,17 +85,19 @@ export class GameLog {
     }
   }
 
-  /** Re-render the visible entries (last MAX_VISIBLE, newest at bottom). */
+  /** Re-render all entries, auto-scrolling to bottom unless user scrolled up. */
   _render() {
     if (this._entries.length === 0) {
       this._renderPlaceholder();
       return;
     }
 
-    const visible = this._entries.slice(-MAX_VISIBLE);
+    const el = this._el;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 32;
+
     this._listEl.innerHTML = '';
 
-    for (const entry of visible) {
+    for (const entry of this._entries) {
       const row = document.createElement('div');
       Object.assign(row.style, {
         display:    'flex',
@@ -145,6 +147,8 @@ export class GameLog {
 
       this._listEl.appendChild(row);
     }
+
+    if (atBottom) el.scrollTop = el.scrollHeight;
   }
 
   /**
