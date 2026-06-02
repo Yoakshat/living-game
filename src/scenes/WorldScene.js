@@ -133,6 +133,16 @@ export default class WorldScene extends Phaser.Scene {
     const mcY = Math.round(this.worldH * 0.12);
     this.add.image(mcX, mcY, 'meditation-chamber').setOrigin(0.5, 0.5).setDepth(mcY + meta.meditationChamber.h / 2);
 
+    // --- Ruined stone arch (far northwest corner, ~8%, 8%) ------------------
+    // A crumbling ancient arch swallowed by vines and moss — a remnant of a
+    // lost civilization that bold explorers can discover at the world's edge.
+    const archX = Math.round(this.worldW * 0.08);
+    const archY = Math.round(this.worldH * 0.08);
+    this.add
+      .image(archX, archY, 'stone-arch')
+      .setOrigin(0.5, 0.5)
+      .setDepth(archY + meta.stoneArch.h / 2);
+
     // --- Ancient rune stone (inside cave, ~75%, 24%) -----------------------
     // A glowing rune-covered slab deep in the cave. Pulsing with cold light.
     // When the player stands within 2 tiles (~96px), a cryptic message appears.
