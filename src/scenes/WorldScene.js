@@ -136,12 +136,20 @@ export default class WorldScene extends Phaser.Scene {
     // --- Ruined stone arch (far northwest corner, ~8%, 8%) ------------------
     // A crumbling ancient arch swallowed by vines and moss — a remnant of a
     // lost civilization that bold explorers can discover at the world's edge.
+    // Static collidable object so players must navigate around it.
     const archX = Math.round(this.worldW * 0.08);
     const archY = Math.round(this.worldH * 0.08);
-    this.add
-      .image(archX, archY, 'stone-arch')
-      .setOrigin(0.5, 0.5)
-      .setDepth(archY + meta.stoneArch.h / 2);
+    const archSprite = this.obstacles.create(archX, archY, 'stone-arch');
+    archSprite.setOrigin(0.5, 0.5);
+    const archW = meta.stoneArch.w;
+    const archH = meta.stoneArch.h;
+    // Collision body covers the base of both pillars (lower ~40% of the texture).
+    const archBodyW = archW * 0.85;
+    const archBodyH = archH * 0.38;
+    archSprite.body.setSize(archBodyW, archBodyH);
+    archSprite.body.setOffset((archW - archBodyW) / 2, archH - archBodyH - 4);
+    archSprite.setDepth(archY + archH / 2);
+    archSprite.refreshBody();
 
     // --- Ancient rune stone (inside cave, ~75%, 24%) -----------------------
     // A glowing rune-covered slab deep in the cave. Pulsing with cold light.

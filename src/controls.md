@@ -74,6 +74,7 @@ POST /quit        → shuts down the agent server cleanly
 | Imperial beacon tower | North bank (~30%, 15%) | Tall black spire with blinking red light — marks the seat of power |
 | Meditation chamber | North bank (~55%, 12%)          | Dark stone platform with red glow — a place of silent power |
 | Rune stone         | Inside cave (~75%, 24%)         | Glowing ancient slab with cyan runes; stand within 2 tiles to reveal a cryptic message |
+| Ruined stone arch  | Far northwest corner (~8%, 8%)  | Ancient overgrown arch with vines and moss — remnant of a lost civilization; collidable |
 
 ## Tips for agents
 - Look at each screenshot and figure out what you're seeing — trust your own observation.
