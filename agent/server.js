@@ -30,6 +30,51 @@ let CHARACTER_NAME = process.env.CHARACTER_NAME || 'Wolf';
 
 let githubUser = null;
 
+let moveCount = 0;
+const PROPOSE_EVERY = 3;
+const COMPACT_EVERY = 10;
+
+// Idea event polling — track seen events by composite key so we log each once.
+const seenIdeaEvents = new Set();
+
+function ideaEventKey(e) {
+  return `${e.eventType}:${e.id}:${e.timestamp}`;
+}
+
+function shortDesc(desc) {
+  if (!desc) return '';
+  return desc.length > 40 ? desc.slice(0, 37) + '...' : desc;
+}
+
+function logIdeaEvent(e) {
+  const s = shortDesc(e.description);
+  const labels = {
+    submitted:  `[${s}] proposed by ${e.submittedBy}`,
+    voted:      `[${s}] voted by ${e.voter} (${e.totalVotes} total)`,
+    promoted:   `[${s}] assigned to ${e.assignedAgent}`,
+    building:   `[${s}] ${e.builder} is building`,
+    completed:  `[${s}] merged into game`,
+    discarded:  `[${s}] discarded (${e.reason})`,
+    reassigned: `[${s}] reassigned ${e.from} → ${e.to}`,
+  };
+  log(`[idea] ${labels[e.eventType] || `${e.eventType}: ${s}`}`);
+}
+
+async function pollIdeaHistory() {
+  try {
+    const res = await fetch(`${SERVER_URL}/idea-history`, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return;
+    const events = await res.json();
+    for (const e of events) {
+      const key = ideaEventKey(e);
+      if (!seenIdeaEvents.has(key)) {
+        seenIdeaEvents.add(key);
+        logIdeaEvent(e);
+      }
+    }
+  } catch (_) {}
+}
+
 // Path to character.md — may be in the agent's per-slug subdir or the root agent dir.
 // Resolve relative to __dirname (agent/).
 const CHARACTER_MD_PATH = path.join(__dirname, 'character.md');
@@ -228,7 +273,8 @@ async function handleRequest(req, res) {
       try {
         const { keys, duration } = JSON.parse(body);
         const mapped = keys.map((k) => resolveKey(k.toLowerCase()));
-        log(`press [${keys.join('+')}] ${duration}ms`);
+        moveCount++;
+        log(`press [${keys.join('+')}] ${duration}ms (move #${moveCount})`);
         await Promise.all(mapped.map((k) => page.keyboard.down(k)));
         await new Promise((resolve) => setTimeout(resolve, duration));
         await Promise.all(mapped.map((k) => page.keyboard.up(k)));
@@ -301,8 +347,100 @@ async function handleRequest(req, res) {
     return;
   }
 
+  if (method === 'POST' && url === '/submit-idea') {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const { description } = JSON.parse(body);
+        const upstream = await fetch(`${SERVER_URL}/submit-idea`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ description, submittedBy: githubUser, characterName: CHARACTER_NAME }),
+          signal: AbortSignal.timeout(8000),
+        });
+        const json = await upstream.json();
+        res.writeHead(upstream.status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(json));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  if (method === 'POST' && url === '/vote-idea') {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const { ideaId } = JSON.parse(body);
+        const upstream = await fetch(`${SERVER_URL}/vote-idea`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ideaId, githubUser, characterName: CHARACTER_NAME }),
+          signal: AbortSignal.timeout(8000),
+        });
+        const json = await upstream.json();
+        res.writeHead(upstream.status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(json));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  if (method === 'POST' && url === '/idea-implementing') {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const { ideaId } = JSON.parse(body);
+        const upstream = await fetch(`${SERVER_URL}/idea-implementing`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ideaId, githubUser, characterName: CHARACTER_NAME }),
+          signal: AbortSignal.timeout(8000),
+        });
+        const json = await upstream.json();
+        res.writeHead(upstream.status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(json));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  if (method === 'POST' && url === '/log-event') {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const { event } = JSON.parse(body);
+        log(`[agent] ${event}`);
+      } catch (_) {}
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    return;
+  }
+
+  if (method === 'POST' && url === '/compact') {
+    log(`=== COMPACTION at move #${moveCount} — continuation spawned ===`);
+    moveCount = 0;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
   if (method === 'GET' && url === '/state') {
     try {
+      log(`--- iteration (move #${moveCount}) ---`);
       // Get position from the game page
       let position = null;
       let nearbyPlayers = [];
@@ -337,8 +475,11 @@ async function handleRequest(req, res) {
         } catch (_) {}
       }
 
+      const propose_idea = moveCount > 0 && moveCount % PROPOSE_EVERY === 0 ? 1 : 0;
+      const compact = moveCount > 0 && moveCount % COMPACT_EVERY === 0 ? 1 : 0;
+
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ position, nearbyPlayers, myAssignment, pendingIdeas }));
+      res.end(JSON.stringify({ position, nearbyPlayers, myAssignment, pendingIdeas, propose_idea, compact, moveCount }));
     } catch (err) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: err.message }));
@@ -358,6 +499,7 @@ async function handleRequest(req, res) {
 }
 
 async function cleanup() {
+  log('=== SESSION END ===');
   if (browser) {
     await browser.close();
     browser = null;
@@ -391,6 +533,9 @@ init()
   .then(() => {
     server.listen(PORT, () => {
       log(`Agent server ready at http://localhost:${PORT} — log: ${logFile}`);
+      // Poll idea history immediately then every 30s
+      pollIdeaHistory();
+      setInterval(pollIdeaHistory, 30_000);
     });
   })
   .catch((err) => {

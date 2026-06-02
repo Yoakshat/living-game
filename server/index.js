@@ -63,6 +63,11 @@ function saveIdeaHistoryToDisk() {
   }
 }
 
+function short(desc) {
+  if (!desc) return '';
+  return desc.length > 40 ? desc.slice(0, 37) + '...' : desc;
+}
+
 function addIdeaEvent(eventType, payload) {
   const entry = { eventType, timestamp: new Date().toISOString(), ...payload };
   ideaHistory.push(entry);
@@ -73,32 +78,38 @@ function addIdeaEvent(eventType, payload) {
   // Build human-readable log message
   let actorField;
   let humanMessage;
-  const { submittedBy, voter, assignedAgent, description, totalVotes, from, to } = payload;
+  const { submittedBy, characterName, voter, assignedAgent, description, totalVotes, from, to, builder } = payload;
+  const agent = characterName || submittedBy || voter || assignedAgent || builder;
+  const s = short(description);
 
   switch (eventType) {
     case 'submitted':
       actorField = submittedBy;
-      humanMessage = `${submittedBy} proposed: ${description}`;
+      humanMessage = `[${s}] proposed by ${characterName || submittedBy}`;
       break;
     case 'voted':
       actorField = voter;
-      humanMessage = `${voter} voted: ${description} (${totalVotes} vote(s))`;
+      humanMessage = `[${s}] voted by ${voter} (${totalVotes} total)`;
       break;
     case 'promoted':
       actorField = assignedAgent;
-      humanMessage = `'${description}' promoted — assigned to ${assignedAgent}`;
+      humanMessage = `[${s}] assigned to ${assignedAgent}`;
+      break;
+    case 'building':
+      actorField = builder;
+      humanMessage = `[${s}] ${builder} is building`;
       break;
     case 'discarded':
       actorField = submittedBy || null;
-      humanMessage = `'${description}' timed out and was discarded`;
+      humanMessage = `[${s}] discarded`;
       break;
     case 'completed':
       actorField = submittedBy;
-      humanMessage = `'${description}' merged! Credit to ${submittedBy}`;
+      humanMessage = `[${s}] merged into game`;
       break;
     case 'reassigned':
       actorField = to;
-      humanMessage = `Idea reassigned from ${from} to ${to}`;
+      humanMessage = `[${s}] reassigned ${from} → ${to}`;
       break;
     default:
       actorField = null;
@@ -195,17 +206,19 @@ function promoteIdea(idea) {
     return;
   }
   const assignedAgent = eligible[Math.floor(Math.random() * eligible.length)].githubUser;
+  const assignedCharacterName = profilesStore.get(assignedAgent)?.name || assignedAgent;
 
   activeIdea = {
     id: idea.id,
     description: idea.description,
     submittedBy: idea.submittedBy,
+    characterName: idea.characterName,
     assignedAgent,
+    assignedCharacterName,
     assignedAt: new Date(),
     beingImplemented: false,
   };
-  console.log(`[idea] Promoted "${idea.description}" — assigned to: ${assignedAgent}`);
-  addIdeaEvent('promoted', { id: idea.id, description: idea.description, assignedAgent });
+  addIdeaEvent('promoted', { id: idea.id, description: idea.description, assignedAgent: assignedCharacterName });
 
   // 30-min discard timer
   discardTimer = setTimeout(() => {
@@ -345,7 +358,7 @@ app.post('/agent-profile/:githubUser', (req, res) => {
 
 // Submit a new idea to the pool
 app.post('/submit-idea', (req, res) => {
-  const { description, submittedBy } = req.body || {};
+  const { description, submittedBy, characterName } = req.body || {};
   if (typeof description !== 'string' || typeof submittedBy !== 'string') {
     return res.status(400).json({ error: 'description (string) and submittedBy (string) required' });
   }
@@ -353,18 +366,18 @@ app.post('/submit-idea', (req, res) => {
     id: generateId(),
     description,
     submittedBy,
+    characterName: characterName || submittedBy,
     votes: [],
     createdAt: new Date(),
   };
   ideaPool.push(idea);
-  console.log(`[idea] New idea submitted by ${submittedBy}: "${description}" (id: ${idea.id})`);
-  addIdeaEvent('submitted', { id: idea.id, description, submittedBy });
+  addIdeaEvent('submitted', { id: idea.id, description, submittedBy, characterName: idea.characterName });
   res.json({ ideaId: idea.id });
 });
 
 // Vote on an idea
 app.post('/vote-idea', (req, res) => {
-  const { ideaId, githubUser } = req.body || {};
+  const { ideaId, githubUser, characterName } = req.body || {};
   if (typeof ideaId !== 'string' || typeof githubUser !== 'string') {
     return res.status(400).json({ error: 'ideaId (string) and githubUser (string) required' });
   }
@@ -384,8 +397,7 @@ app.post('/vote-idea', (req, res) => {
   }
 
   idea.votes.push(githubUser);
-  console.log(`[idea] ${githubUser} voted on "${idea.description}" — ${idea.votes.length} vote(s)`);
-  addIdeaEvent('voted', { id: idea.id, description: idea.description, voter: githubUser, totalVotes: idea.votes.length });
+  addIdeaEvent('voted', { id: idea.id, description: idea.description, voter: characterName || githubUser, totalVotes: idea.votes.length });
 
   // Check quorum: promote if threshold reached and no active idea
   if (idea.votes.length >= getQuorum() && !activeIdea) {
@@ -430,11 +442,11 @@ app.post('/idea-complete', (req, res) => {
 
 // Mark active idea as being implemented — called by agent immediately after spawning background subagent
 app.post('/idea-implementing', (req, res) => {
-  const { ideaId, githubUser } = req.body || {};
+  const { ideaId, githubUser, characterName } = req.body || {};
   if (!activeIdea || activeIdea.id !== ideaId) return res.status(404).json({ error: 'idea not active' });
   if (activeIdea.assignedAgent !== githubUser) return res.status(403).json({ error: 'not assigned to you' });
   activeIdea.beingImplemented = true;
-  console.log(`[idea] "${activeIdea.description}" marked as being implemented by ${githubUser}`);
+  addIdeaEvent('building', { id: ideaId, description: activeIdea.description, builder: characterName || githubUser });
   res.json({ ok: true });
 });
 
@@ -584,11 +596,11 @@ io.on('connection', (socket) => {
         activeIdea = null;
         advanceQueue();
       } else {
-        const prevAgent = activeIdea.assignedAgent;
+        const prevCharName = activeIdea.assignedCharacterName || activeIdea.assignedAgent;
         activeIdea.assignedAgent = eligible[Math.floor(Math.random() * eligible.length)].githubUser;
+        activeIdea.assignedCharacterName = profilesStore.get(activeIdea.assignedAgent)?.name || activeIdea.assignedAgent;
         activeIdea.beingImplemented = false;
-        console.log(`[idea] Reassigned to ${activeIdea.assignedAgent}`);
-        addIdeaEvent('reassigned', { id: activeIdea.id, description: activeIdea.description, from: prevAgent, to: activeIdea.assignedAgent });
+        addIdeaEvent('reassigned', { id: activeIdea.id, description: activeIdea.description, from: prevCharName, to: activeIdea.assignedCharacterName });
       }
     }
   });
