@@ -6,7 +6,8 @@ import { GameLog } from '../ui/GameLog.js';
 const WORLD_TILES_X = 32;
 const WORLD_TILES_Y = 24;
 
-const PLAYER_SPEED = 200; // px/sec
+const PLAYER_SPEED = 200;      // px/sec (full day speed)
+const PLAYER_SPEED_NIGHT = 140; // px/sec (reduced at night)
 
 // How often we emit our position to the server (ms). 50ms ≈ 20 Hz.
 const MOVE_EMIT_INTERVAL = 50;
@@ -28,6 +29,8 @@ export default class WorldScene extends Phaser.Scene {
     this._eventQueue = [];
     this._ready = false;
     this._lastEmitTime = 0;
+    // Day/night: current darkness level (0=day, 1=night), used for speed scaling.
+    this._nightAlphaCurrent = 0;
     // Game log panel
     this._gameLog = null;
   }
@@ -108,16 +111,31 @@ export default class WorldScene extends Phaser.Scene {
     // lighter glow halos around landmark beacons (campfire, well, cave area).
     //
     // Cycle timing (ms):
-    //   DAY  180 000  (3 min, fully transparent overlay)
-    //   DUSK  60 000  (1 min transition day→night)
-    //   NIGHT 120 000 (2 min dark)
-    //   DAWN  60 000  (1 min transition night→day)
-    //   Total cycle: 420 000 ms (7 min)
-    this._DN_DAY_MS   = 180000;
-    this._DN_DUSK_MS  =  60000;
-    this._DN_NIGHT_MS = 120000;
-    this._DN_DAWN_MS  =  60000;
+    //   DAY   60 000  (1 min, fully transparent overlay)
+    //   DUSK  30 000  (30 s transition day→night)
+    //   NIGHT 60 000  (1 min dark — stars & moon visible)
+    //   DAWN  30 000  (30 s transition night→day)
+    //   Total cycle: ~3 min (world gradually dims over ~2 min then brightens)
+    this._DN_DAY_MS   =  60000;
+    this._DN_DUSK_MS  =  30000;
+    this._DN_NIGHT_MS =  60000;
+    this._DN_DAWN_MS  =  30000;
     this._DN_CYCLE_MS = this._DN_DAY_MS + this._DN_DUSK_MS + this._DN_NIGHT_MS + this._DN_DAWN_MS;
+
+    // Star field — random positions generated once, rendered at night.
+    // Each star: { x, y, size } in world-space coordinates.
+    this._stars = [];
+    const starRng = mulberry32(0xDEADBEEF);
+    for (let i = 0; i < 80; i++) {
+      this._stars.push({
+        x: starRng() * this.worldW,
+        y: starRng() * this.worldH,
+        size: 1 + Math.floor(starRng() * 2), // 1 or 2 px
+      });
+    }
+    // Moon position — fixed upper-right area of the world (decorative).
+    this._moonX = this.worldW * 0.82;
+    this._moonY = this.worldH * 0.10;
     this._dnStartTime = 0;  // set in update once time is available
 
     // Graphics layer: world-space, high depth but below HUD.
@@ -744,9 +762,17 @@ export default class WorldScene extends Phaser.Scene {
     if (k.up.isDown) vy -= 1;
     if (k.down.isDown) vy += 1;
 
+    // Movement speed — reduced during darkness (night / deep dusk / dawn).
+    // _nightAlphaCurrent is set in the day/night block below; default 0 until set.
+    const currentSpeed = Phaser.Math.Linear(
+      PLAYER_SPEED,
+      PLAYER_SPEED_NIGHT,
+      this._nightAlphaCurrent || 0
+    );
+
     if (vx !== 0 || vy !== 0) {
       const len = Math.hypot(vx, vy);
-      body.setVelocity((vx / len) * PLAYER_SPEED, (vy / len) * PLAYER_SPEED);
+      body.setVelocity((vx / len) * currentSpeed, (vy / len) * currentSpeed);
 
       let dir = this.facing;
       if (Math.abs(vx) > Math.abs(vy)) {
@@ -827,6 +853,9 @@ export default class WorldScene extends Phaser.Scene {
       phaseLabel = 'Dawn';
     }
 
+    // Expose to movement-speed block (which runs before this in the same update).
+    this._nightAlphaCurrent = nightAlpha;
+
     this._nightOverlay.clear();
     if (nightAlpha > 0.01) {
       const cam = this.cameras.main;
@@ -847,6 +876,8 @@ export default class WorldScene extends Phaser.Scene {
       const VIS_R = 150;
       // Beacon glow radius (campfire, well) — slightly wider than player.
       const BEACON_R = 80;
+      // Campfire glows brighter at night — radius scales with nightAlpha.
+      const CAMPFIRE_R = BEACON_R + nightAlpha * 60;
       // How many gradient steps to approximate a radial gradient.
       const STEPS = 24;
 
@@ -867,24 +898,53 @@ export default class WorldScene extends Phaser.Scene {
       this._nightOverlay.fillStyle(0x000d1a, overlayAlpha);
       this._nightOverlay.fillRect(camX, camY, wW, wH);
 
-      // 2. Punch visibility holes — local player.
+      // 2. Stars — small bright dots scattered across the world, fade in with night.
+      if (nightAlpha > 0.1) {
+        const starAlpha = Math.min(1, (nightAlpha - 0.1) / 0.4);
+        const twinkle = 0.7 + 0.3 * Math.sin(time * 0.0025);
+        this._nightOverlay.fillStyle(0xffffff, starAlpha * twinkle * 0.9);
+        for (const star of this._stars) {
+          this._nightOverlay.fillRect(star.x, star.y, star.size, star.size);
+        }
+      }
+
+      // 3. Moon — a soft white circle in the upper-right area of the world.
+      if (nightAlpha > 0.2) {
+        const moonAlpha = Math.min(1, (nightAlpha - 0.2) / 0.4);
+        const MOON_R = 14;
+        // Soft glow halo around the moon.
+        for (let s = 0; s < 10; s++) {
+          const t2 = s / 10;
+          this._nightOverlay.fillStyle(0xddeeff, moonAlpha * (1 - t2) * 0.35);
+          this._nightOverlay.fillCircle(this._moonX, this._moonY, MOON_R + t2 * 30);
+        }
+        // Moon disc.
+        this._nightOverlay.fillStyle(0xeeeeff, moonAlpha * 0.92);
+        this._nightOverlay.fillCircle(this._moonX, this._moonY, MOON_R);
+        // Subtle crescent shadow.
+        this._nightOverlay.fillStyle(0x000d1a, moonAlpha * 0.55);
+        this._nightOverlay.fillCircle(this._moonX + 5, this._moonY - 3, MOON_R - 3);
+      }
+
+      // 4. Punch visibility holes — local player.
       drawHole(this.player.x, this.player.y, VIS_R);
 
-      // 3. Remote players also get a small personal visibility radius.
+      // 5. Remote players also get a small personal visibility radius.
       for (const [, rp] of this.remotePlayers) {
         drawHole(rp.sprite.x, rp.sprite.y, VIS_R * 0.8);
       }
 
-      // 4. Campfire beacon glow (warm orange tint).
+      // 6. Campfire beacon glow — brighter at night (visible beacon).
+      const cfFlicker = 1 + 0.12 * Math.sin(time * 0.009) + 0.06 * Math.sin(time * 0.021);
       for (let s = 0; s < STEPS; s++) {
         const t2 = s / STEPS;
         const holeAlpha = overlayAlpha * t2 * t2;
-        const r = BEACON_R * (1 - t2);
+        const r = CAMPFIRE_R * cfFlicker * (1 - t2);
         this._nightOverlay.fillStyle(0xff6a00, holeAlpha);
         this._nightOverlay.fillCircle(this._campfireX, this._campfireY, r);
       }
 
-      // 5. Well beacon glow (soft blue).
+      // 7. Well beacon glow (soft blue).
       for (let s = 0; s < STEPS; s++) {
         const t2 = s / STEPS;
         const holeAlpha = overlayAlpha * t2 * t2;
@@ -893,7 +953,7 @@ export default class WorldScene extends Phaser.Scene {
         this._nightOverlay.fillCircle(this._wellX, this._wellY, r);
       }
 
-      // 6. Cave entrance beacon (faint purple).
+      // 8. Cave entrance beacon (faint purple).
       for (let s = 0; s < STEPS; s++) {
         const t2 = s / STEPS;
         const holeAlpha = overlayAlpha * t2 * t2;
