@@ -93,20 +93,9 @@ async function govern() {
 
     if (!winner) {
       winner = pr;
-      log(`PR #${num} wins — merging`);
-      try {
-        await ghFetch(`/pulls/${num}/merge`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ merge_method: 'squash', commit_title: pr.title }),
-        });
-        log(`PR #${num} merged`);
-      } catch (err) {
-        log(`PR #${num} merge failed: ${err.message}`);
-        winner = null;
-        continue;
-      }
-      // Notify game server
+      log(`PR #${num} wins — CI green, unlocking next idea`);
+      // Notify game server immediately (CI green = merge is guaranteed)
+      // so the next idea can promote without waiting for the actual merge
       try {
         await fetch(`${SERVER_URL}/idea-complete`, {
           method: 'POST',
@@ -117,6 +106,17 @@ async function govern() {
         log(`idea-complete posted for ${ideaId}`);
       } catch (err) {
         log(`idea-complete failed: ${err.message}`);
+      }
+      // Merge after unlocking — next idea can now be promoted in parallel
+      try {
+        await ghFetch(`/pulls/${num}/merge`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ merge_method: 'squash', commit_title: pr.title }),
+        });
+        log(`PR #${num} merged`);
+      } catch (err) {
+        log(`PR #${num} merge failed: ${err.message}`);
       }
     } else {
       log(`PR #${num}: another PR already won — closing`);
