@@ -1067,6 +1067,90 @@ function makeStoneArchTexture(scene, key) {
   return { w: ARCH_W, h: ARCH_H };
 }
 
+// --- Map fragment -----------------------------------------------------------
+// A torn scrap of an old parchment map, half-curled, with faint ink lines and
+// a glowing golden edge so it reads as a valuable collectible against the
+// grass. Purely decorative with overlap-based pickup (no physics body) —
+// the scene handles "collected" detection via distance check.
+const FRAGMENT_W = 40;
+const FRAGMENT_H = 40;
+
+function makeMapFragmentTexture(scene, key) {
+  const g = scene.make.graphics({ x: 0, y: 0, add: false });
+  const cx = FRAGMENT_W / 2;
+  const cy = FRAGMENT_H / 2;
+
+  // Ground shadow.
+  g.fillStyle(0x000000, 0.2);
+  g.fillEllipse(cx, FRAGMENT_H - 7, 26, 8);
+
+  // Torn parchment silhouette — irregular polygon, not a clean rectangle.
+  const poly = [
+    4, 10,
+    10, 4,
+    24, 2,
+    34, 9,
+    36, 20,
+    30, 30,
+    18, 36,
+    7, 32,
+    2, 22,
+  ];
+  g.fillStyle(0xd9c08a, 1);
+  g.fillPoints(toPoints(poly), true);
+
+  // Darker aged-edge shadow along the lower-right.
+  g.fillStyle(0xb89a5e, 1);
+  g.fillPoints(
+    toPoints([34, 9, 36, 20, 30, 30, 18, 36, 24, 24, 30, 14]),
+    true
+  );
+
+  // Lighter sunlit patch upper-left.
+  g.fillStyle(0xead9a8, 0.8);
+  g.fillPoints(
+    toPoints([4, 10, 10, 4, 24, 2, 18, 14, 8, 18]),
+    true
+  );
+
+  // Faint ink map lines — a couple of squiggly "routes" and a small "X".
+  g.lineStyle(1, 0x6b5530, 0.7);
+  g.beginPath();
+  g.moveTo(9, 14);
+  g.lineTo(15, 19);
+  g.lineTo(13, 25);
+  g.lineTo(20, 28);
+  g.strokePath();
+  g.beginPath();
+  g.moveTo(20, 10);
+  g.lineTo(27, 16);
+  g.strokePath();
+
+  g.lineStyle(1.5, 0x8a3030, 0.85);
+  g.beginPath();
+  g.moveTo(22, 21);
+  g.lineTo(27, 26);
+  g.strokePath();
+  g.beginPath();
+  g.moveTo(27, 21);
+  g.lineTo(22, 26);
+  g.strokePath();
+
+  // Torn/frayed edge marks — small dark notches along the border.
+  g.fillStyle(0x8a7344, 0.6);
+  g.fillTriangle(34, 9, 36, 20, 32, 14);
+  g.fillTriangle(2, 22, 7, 32, 4, 25);
+
+  // Golden glow ring to signal "collectible" — pulsing handled by the scene
+  // via tint, this is just a static base highlight.
+  g.lineStyle(2, 0xffd66b, 0.55);
+  g.strokeEllipse(cx, cy, 34, 32);
+
+  g.generateTexture(key, FRAGMENT_W, FRAGMENT_H);
+  g.destroy();
+  return { w: FRAGMENT_W, h: FRAGMENT_H };
+}
+
 // Generate everything; returns metadata the scene needs for sizing/bodies.
 export function generateTextures(scene) {
   const grassVariants = 4;
@@ -1104,6 +1188,9 @@ export function generateTextures(scene) {
   // Ruined stone arch — ancient overgrown remnant in the far northwest corner.
   const stoneArch = makeStoneArchTexture(scene, 'stone-arch');
 
+  // Map fragment — collectible parchment scrap, scattered in distant corners.
+  const mapFragment = makeMapFragmentTexture(scene, 'map-fragment');
+
   return {
     tile: TILE,
     grassVariants,
@@ -1119,5 +1206,6 @@ export function generateTextures(scene) {
     meditationChamber,
     runeStone,
     stoneArch,
+    mapFragment,
   };
 }

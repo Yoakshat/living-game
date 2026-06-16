@@ -185,6 +185,60 @@ export default class WorldScene extends Phaser.Scene {
       .setDepth(10002)
       .setAlpha(0);
 
+    // --- Map fragments (hidden in the world's distant corners/edges) -------
+    // Collectibles that reward thorough exploration. Each is a torn parchment
+    // scrap placed near a corner or far edge of the world. Walking within
+    // pickup range collects it; collecting all of them reveals the full map.
+    // No physics body — pickup is a simple distance check in update().
+    const fragmentSpots = [
+      { x: this.worldW * 0.04, y: this.worldH * 0.04 },   // far NW corner
+      { x: this.worldW * 0.96, y: this.worldH * 0.05 },   // far NE corner
+      { x: this.worldW * 0.04, y: this.worldH * 0.95 },   // far SW corner
+      { x: this.worldW * 0.97, y: this.worldH * 0.92 },   // far SE corner
+      { x: this.worldW * 0.50, y: this.worldH * 0.02 },   // far north edge, mid
+    ];
+    this._fragments = fragmentSpots.map((spot, i) => {
+      const fx = Math.round(spot.x);
+      const fy = Math.round(spot.y);
+      const sprite = this.add
+        .image(fx, fy, 'map-fragment')
+        .setOrigin(0.5, 0.5)
+        .setDepth(fy + meta.mapFragment.h / 2);
+      return { id: i, x: fx, y: fy, sprite, collected: false };
+    });
+    this._fragmentsCollected = 0;
+    this._fragmentsTotal = this._fragments.length;
+
+    // Fragment counter — small camera-fixed HUD text, top-left.
+    this._fragmentCounterText = this.add
+      .text(0, 0, this._fragmentCounterLabel(), {
+        fontFamily: '"Palatino Linotype", Palatino, serif',
+        fontSize: '14px',
+        color: '#ffe9b0',
+        stroke: '#241a08',
+        strokeThickness: 4,
+      })
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(10003);
+
+    // Toast — brief camera-fixed message shown on pickup / full discovery.
+    this._toastText = this.add
+      .text(0, 0, '', {
+        fontFamily: '"Palatino Linotype", Palatino, serif',
+        fontSize: '16px',
+        color: '#ffd66b',
+        stroke: '#241a08',
+        strokeThickness: 4,
+        align: 'center',
+        wordWrap: { width: 360 },
+      })
+      .setOrigin(0.5, 0.5)
+      .setScrollFactor(0)
+      .setDepth(10003)
+      .setAlpha(0);
+    this._toastTimer = null;
+
     // --- Player -------------------------------------------------------------
     const spawn = this.findClearSpawn(placements, T);
     this.player = this.physics.add.sprite(spawn.x, spawn.y, 'player-down');
@@ -464,6 +518,51 @@ export default class WorldScene extends Phaser.Scene {
       .setDepth(99999);
   }
 
+  // ---- Map fragment helpers --------------------------------------------------
+  _fragmentCounterLabel() {
+    return `Map fragments: ${this._fragmentsCollected}/${this._fragmentsTotal}`;
+  }
+
+  _showToast(message, duration = 2600) {
+    if (this._toastTimer) {
+      this._toastTimer.remove();
+      this._toastTimer = null;
+    }
+    const camW = this.cameras.main.width;
+    const camH = this.cameras.main.height;
+    this._toastText.setText(message);
+    this._toastText.setPosition(camW / 2, camH * 0.18);
+    this._toastText.setAlpha(1);
+    this._toastTimer = this.time.delayedCall(duration, () => {
+      this._toastText.setAlpha(0);
+    });
+  }
+
+  _checkFragmentPickups() {
+    const PICKUP_DIST = 36;
+    for (const frag of this._fragments) {
+      if (frag.collected) continue;
+      const d = Phaser.Math.Distance.Between(
+        this.player.x, this.player.y, frag.x, frag.y
+      );
+      if (d < PICKUP_DIST) {
+        frag.collected = true;
+        frag.sprite.destroy();
+        this._fragmentsCollected++;
+        this._fragmentCounterText.setText(this._fragmentCounterLabel());
+
+        if (this._fragmentsCollected >= this._fragmentsTotal) {
+          this._showToast('World map fully discovered!', 4000);
+          console.log('[map fragments] world map fully discovered');
+        } else {
+          this._showToast(
+            `Map fragment found! (${this._fragmentsCollected}/${this._fragmentsTotal})`
+          );
+        }
+      }
+    }
+  }
+
   // ---- Obstacle helpers (unchanged) ----------------------------------------
   buildPlacements(T) {
     const rng = mulberry32(20260527);
@@ -675,6 +774,18 @@ export default class WorldScene extends Phaser.Scene {
         this.cameras.main.height
       );
     }
+
+    // Map fragments: pulse a soft golden glow and check for player pickup.
+    const fragPulse = 0.5 + 0.5 * Math.sin(time * 0.0035);
+    const fragTint = Phaser.Display.Color.GetColor(
+      255,
+      Math.round(210 + fragPulse * 45),
+      Math.round(140 + fragPulse * 90)
+    );
+    for (const frag of this._fragments) {
+      if (!frag.collected) frag.sprite.setTint(fragTint);
+    }
+    this._checkFragmentPickups();
 
     // Rune stone glow pulse — a slow sine-wave tint cycle on the stone sprite.
     // Alternates between pale cyan-white and the base sprite color.
