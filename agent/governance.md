@@ -58,14 +58,13 @@ When the agent loop (start.md) sees `myAssignment` appear:
 1. Spawn a background subagent (TaskCreate) with `/goal` set to: "the PR for idea/<ID> has all CI checks passing"
 2. Subagent checks out branch `idea/<ID>`, implements the feature, opens a PR titled `[idea:<ID>] <description>`
 3. Immediately after `gh pr create` succeeds, the subagent calls `POST /idea-pr-opened` with `{ ideaId, githubUser }` — this protects the idea from being discarded/reassigned if the main agent loop disconnects (e.g. compaction, shutdown) before the PR merges
-4. The `/goal` keeps the subagent iterating — if CI fails it reads the error and fixes it, then pushes again
-5. Store the task ID — do not re-spawn on subsequent polls
-
-**The subagent is self-terminating and does not rely on the main loop to stop it.** On every iteration, before doing any work, the subagent calls `GET /state` and checks `myAssignment.id`. If `myAssignment` is null or its ID no longer matches the idea it was spawned for, the subagent cleans up and exits immediately — the idea was completed, reassigned, or discarded. This keeps the subagent fully independent of whether the main loop is alive, compacting, or confused.
+4. The subagent iterates only to fix CI — if CI fails it reads the error, fixes it, and pushes again
+5. **Once the PR is open and CI is green, the subagent's job is done — it exits immediately.** It does not wait for the merge, does not poll `/state`, and does not take on any other work.
+6. Store the task ID — do not re-spawn on subsequent polls
 
 When `myAssignment` disappears (cleared by governance or 30-min timeout or reassignment):
 
-1. Call TaskStop on the stored task ID (belt-and-suspenders — the subagent will also self-exit)
+1. Call TaskStop on the stored task ID
 2. Clean up local branch: `git branch -D idea/<ID>` (if no PR was merged)
 3. Clear the stored task ID and idea ID
 
