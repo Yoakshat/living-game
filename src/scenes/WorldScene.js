@@ -77,6 +77,9 @@ export default class WorldScene extends Phaser.Scene {
     const cfx = this.worldW / 2;
     const cfy = this.worldH / 2;
     this.add.image(cfx, cfy, 'campfire').setDepth(cfy);
+    // Store campfire position for night-cycle glow
+    this._campfireX = cfx;
+    this._campfireY = cfy;
 
     // --- River (horizontal water strip, ~30% down the map) ------------------
     // Tiles row 6-8 (0-indexed), full width. Static bodies block passage.
@@ -97,6 +100,43 @@ export default class WorldScene extends Phaser.Scene {
     this._caveX = caveX;
     this._caveY = caveY;
 
+    // --- Day/night cycle overlay --------------------------------------------
+    // Sits above the world but below HUD elements.
+    // The overlay is a full-screen dark rectangle (camera-fixed) whose alpha
+    // varies with the cycle phase.  At night we also punch a "torch" hole
+    // around each player so they can only see ~150 px around themselves, and
+    // lighter glow halos around landmark beacons (campfire, well, cave area).
+    //
+    // Cycle timing (ms):
+    //   DAY  180 000  (3 min, fully transparent overlay)
+    //   DUSK  60 000  (1 min transition day→night)
+    //   NIGHT 120 000 (2 min dark)
+    //   DAWN  60 000  (1 min transition night→day)
+    //   Total cycle: 420 000 ms (7 min)
+    this._DN_DAY_MS   = 180000;
+    this._DN_DUSK_MS  =  60000;
+    this._DN_NIGHT_MS = 120000;
+    this._DN_DAWN_MS  =  60000;
+    this._DN_CYCLE_MS = this._DN_DAY_MS + this._DN_DUSK_MS + this._DN_NIGHT_MS + this._DN_DAWN_MS;
+    this._dnStartTime = 0;  // set in update once time is available
+
+    // Graphics layer: world-space, high depth but below HUD.
+    this._nightOverlay = this.add.graphics();
+    this._nightOverlay.setDepth(9500);
+
+    // Small clock label (camera-fixed, bottom-right).
+    this._clockLabel = this.add
+      .text(0, 0, 'Day', {
+        fontFamily: '"Palatino Linotype", Palatino, serif',
+        fontSize: '13px',
+        color: '#ffe9b0',
+        stroke: '#241a08',
+        strokeThickness: 3,
+      })
+      .setOrigin(1, 1)
+      .setScrollFactor(0)
+      .setDepth(10004);
+
     // Darkness overlay — fades in as the player approaches the cave.
     // Camera-fixed so it covers the whole viewport regardless of scroll.
     this._caveVignette = this.add.graphics();
@@ -111,6 +151,8 @@ export default class WorldScene extends Phaser.Scene {
       .image(wellX, wellY, 'well')
       .setOrigin(0.5, 0.5)
       .setDepth(wellY + meta.well.h / 2);
+    this._wellX = wellX;
+    this._wellY = wellY;
 
     // --- Healing spring (south-east quadrant) --------------------------------
     // A peaceful glowing pool — no collision. A place of rest for weary travelers.
@@ -756,6 +798,116 @@ export default class WorldScene extends Phaser.Scene {
         rp.sprite.x,
         rp.sprite.y - this.meta.player.size / 2 - 4
       );
+    }
+
+    // ---- Day / night cycle --------------------------------------------------
+    // Initialise start time on the first update tick.
+    if (this._dnStartTime === 0) this._dnStartTime = time;
+
+    const elapsed = (time - this._dnStartTime) % this._DN_CYCLE_MS;
+    const DAY   = this._DN_DAY_MS;
+    const DUSK  = this._DN_DUSK_MS;
+    const NIGHT = this._DN_NIGHT_MS;
+    const DAWN  = this._DN_DAWN_MS;
+
+    // nightAlpha: 0 = full day, 1 = full night.
+    let nightAlpha = 0;
+    let phaseLabel = 'Day';
+    if (elapsed < DAY) {
+      nightAlpha = 0;
+      phaseLabel = 'Day';
+    } else if (elapsed < DAY + DUSK) {
+      nightAlpha = (elapsed - DAY) / DUSK;
+      phaseLabel = 'Dusk';
+    } else if (elapsed < DAY + DUSK + NIGHT) {
+      nightAlpha = 1;
+      phaseLabel = 'Night';
+    } else {
+      nightAlpha = 1 - (elapsed - DAY - DUSK - NIGHT) / DAWN;
+      phaseLabel = 'Dawn';
+    }
+
+    this._nightOverlay.clear();
+    if (nightAlpha > 0.01) {
+      const cam = this.cameras.main;
+      const camX = cam.scrollX;
+      const camY = cam.scrollY;
+      const camW = cam.width;
+      const camH = cam.height;
+      const zoom = cam.zoom;
+      // World-pixel dimensions that fill the viewport.
+      const wW = camW / zoom;
+      const wH = camH / zoom;
+
+      // Max darkness alpha at full night.
+      const maxAlpha = 0.85;
+      const overlayAlpha = nightAlpha * maxAlpha;
+
+      // Player visibility radius in world pixels.
+      const VIS_R = 150;
+      // Beacon glow radius (campfire, well) — slightly wider than player.
+      const BEACON_R = 80;
+      // How many gradient steps to approximate a radial gradient.
+      const STEPS = 24;
+
+      // Helper: draw a radial "hole" cutout that softens at the edge.
+      // We draw a series of concentric circles from inside out, fading from
+      // 0 alpha (transparent, = visible area) to overlayAlpha (dark).
+      const drawHole = (wx, wy, radius) => {
+        for (let s = 0; s < STEPS; s++) {
+          const t2 = s / STEPS;
+          const holeAlpha = overlayAlpha * t2 * t2; // quadratic fade
+          const r = radius * (1 - t2);
+          this._nightOverlay.fillStyle(0x000d1a, holeAlpha);
+          this._nightOverlay.fillCircle(wx, wy, r);
+        }
+      };
+
+      // 1. Draw the base dark overlay covering the full visible world area.
+      this._nightOverlay.fillStyle(0x000d1a, overlayAlpha);
+      this._nightOverlay.fillRect(camX, camY, wW, wH);
+
+      // 2. Punch visibility holes — local player.
+      drawHole(this.player.x, this.player.y, VIS_R);
+
+      // 3. Remote players also get a small personal visibility radius.
+      for (const [, rp] of this.remotePlayers) {
+        drawHole(rp.sprite.x, rp.sprite.y, VIS_R * 0.8);
+      }
+
+      // 4. Campfire beacon glow (warm orange tint).
+      for (let s = 0; s < STEPS; s++) {
+        const t2 = s / STEPS;
+        const holeAlpha = overlayAlpha * t2 * t2;
+        const r = BEACON_R * (1 - t2);
+        this._nightOverlay.fillStyle(0xff6a00, holeAlpha);
+        this._nightOverlay.fillCircle(this._campfireX, this._campfireY, r);
+      }
+
+      // 5. Well beacon glow (soft blue).
+      for (let s = 0; s < STEPS; s++) {
+        const t2 = s / STEPS;
+        const holeAlpha = overlayAlpha * t2 * t2;
+        const r = BEACON_R * 0.7 * (1 - t2);
+        this._nightOverlay.fillStyle(0x4488ff, holeAlpha);
+        this._nightOverlay.fillCircle(this._wellX, this._wellY, r);
+      }
+
+      // 6. Cave entrance beacon (faint purple).
+      for (let s = 0; s < STEPS; s++) {
+        const t2 = s / STEPS;
+        const holeAlpha = overlayAlpha * t2 * t2;
+        const r = BEACON_R * 0.6 * (1 - t2);
+        this._nightOverlay.fillStyle(0xaa44cc, holeAlpha);
+        this._nightOverlay.fillCircle(this._caveX, this._caveY, r);
+      }
+    }
+
+    // Clock label — bottom-right of viewport.
+    {
+      const cam = this.cameras.main;
+      this._clockLabel.setText(phaseLabel);
+      this._clockLabel.setPosition(cam.width - 8, cam.height - 8);
     }
 
     // Cave darkness: dim the screen as the player enters the cave.
