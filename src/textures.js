@@ -1067,6 +1067,90 @@ function makeStoneArchTexture(scene, key) {
   return { w: ARCH_W, h: ARCH_H };
 }
 
+// --- Explorer camp (weathered tent, extinguished fire, scattered gear) ------
+const CAMP_W = 80;
+const CAMP_H = 80;
+
+function makeExplorerCampTexture(scene, key) {
+  const g = scene.make.graphics({ x: 0, y: 0, add: false });
+  const cx = CAMP_W / 2;
+  const cy = CAMP_H / 2;
+
+  // Ground shadow.
+  g.fillStyle(0x000000, 0.15);
+  g.fillEllipse(cx, cy + 18, 50, 16);
+
+  // Weathered tent — faded canvas with patches
+  // Tent fabric (light tan/grey)
+  g.fillStyle(0xb89968, 1);
+  g.beginPath();
+  g.moveTo(cx - 20, cy + 8);
+  g.lineTo(cx, cy - 18);
+  g.lineTo(cx + 20, cy + 8);
+  g.lineTo(cx - 20, cy + 8);
+  g.fill();
+
+  // Tent fabric shading (darker side)
+  g.fillStyle(0x9a7848, 0.6);
+  g.beginPath();
+  g.moveTo(cx, cy - 18);
+  g.lineTo(cx + 20, cy + 8);
+  g.lineTo(cx + 2, cy + 4);
+  g.lineTo(cx, cy - 18);
+  g.fill();
+
+  // Tent patches (weathered spots)
+  g.fillStyle(0x8a6838, 0.5);
+  g.fillRect(cx - 12, cy - 6, 8, 5);
+  g.fillRect(cx + 6, cy - 2, 6, 8);
+
+  // Tent pole (simple vertical line)
+  g.lineStyle(2, 0x6a5030, 1);
+  g.beginPath();
+  g.moveTo(cx, cy - 18);
+  g.lineTo(cx, cy + 8);
+  g.strokePath();
+
+  // Extinguished campfire (grey ash pile)
+  // Ash mound
+  g.fillStyle(0x8a8278, 1);
+  g.fillEllipse(cx - 18, cy + 12, 12, 6);
+
+  // Charred logs
+  g.fillStyle(0x4a4238, 0.8);
+  g.beginPath();
+  g.moveTo(cx - 24, cy + 12);
+  g.lineTo(cx - 12, cy + 12);
+  g.lineStyle(3, 0x4a4238, 0.8);
+  g.strokePath();
+
+  // Scattered gear — two weathered packs/boxes
+  // Pack 1 (left)
+  g.fillStyle(0x8a6a4a, 1);
+  g.fillRect(cx - 35, cy, 14, 12);
+  g.fillStyle(0x6a4a2a, 0.7);
+  g.fillRect(cx - 33, cy + 2, 10, 3);
+  g.fillStyle(0xaa8a6a, 0.5);
+  g.fillRect(cx - 32, cy + 1, 2, 8);
+
+  // Pack 2 (right)
+  g.fillStyle(0x8a7050, 1);
+  g.fillRect(cx + 20, cy - 2, 13, 11);
+  g.fillStyle(0x6a5030, 0.7);
+  g.fillRect(cx + 22, cy + 1, 9, 3);
+  g.fillStyle(0xa89a70, 0.5);
+  g.fillRect(cx + 29, cy, 2, 7);
+
+  // Scattered items (small rocks/tools)
+  g.fillStyle(0x7a7060, 0.8);
+  g.fillRect(cx - 8, cy + 10, 4, 4);
+  g.fillRect(cx + 8, cy + 6, 3, 3);
+
+  g.generateTexture(key, CAMP_W, CAMP_H);
+  g.destroy();
+  return { w: CAMP_W, h: CAMP_H };
+}
+
 // Generate everything; returns metadata the scene needs for sizing/bodies.
 export function generateTextures(scene) {
   const grassVariants = 4;
@@ -1104,6 +1188,9 @@ export function generateTextures(scene) {
   // Ruined stone arch — ancient overgrown remnant in the far northwest corner.
   const stoneArch = makeStoneArchTexture(scene, 'stone-arch');
 
+  // Explorer camp — hidden weathered tent and gear in the far southwest.
+  const explorerCamp = makeExplorerCampTexture(scene, 'explorer-camp');
+
   return {
     tile: TILE,
     grassVariants,
@@ -1119,5 +1206,6 @@ export function generateTextures(scene) {
     meditationChamber,
     runeStone,
     stoneArch,
+    explorerCamp,
   };
 }

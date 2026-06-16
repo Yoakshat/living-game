@@ -148,6 +148,16 @@ export default class WorldScene extends Phaser.Scene {
     const archBodyH = archH * 0.38;
     archSprite.body.setSize(archBodyW, archBodyH);
     archSprite.body.setOffset((archW - archBodyW) / 2, archH - archBodyH - 4);
+
+    // --- Hidden explorer camp (far southwest corner, ~15%, 78%) ---------------
+    // A weathered tent, extinguished campfire, and scattered gear left behind by
+    // an unknown traveler — a mystery for explorers to discover at the world's edge.
+    const campX = Math.round(this.worldW * 0.15);
+    const campY = Math.round(this.worldH * 0.78);
+    this.add
+      .image(campX, campY, 'explorer-camp')
+      .setOrigin(0.5, 0.5)
+      .setDepth(campY + meta.explorerCamp.h / 2);
     archSprite.setDepth(archY + archH / 2);
     archSprite.refreshBody();
 
