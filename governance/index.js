@@ -3,7 +3,7 @@ const http = require('http');
 const SERVER_URL = process.env.SERVER_URL;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const REPO = 'Yoakshat/living-game';
-const POLL_MS = 30_000;
+const POLL_MS = 10_000;
 
 if (!SERVER_URL) { console.error('SERVER_URL required'); process.exit(1); }
 if (!GITHUB_TOKEN) { console.error('GITHUB_TOKEN required'); process.exit(1); }
