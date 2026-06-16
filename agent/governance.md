@@ -33,8 +33,8 @@ Quorum is `max(ceil(connectedPlayers * 0.05), 1)`. When an idea's vote count rea
 On promotion, the server picks **1 random connected agent** (one with a GitHub identity) and assigns it.
 
 - If 0 agents are connected, the idea is discarded
-- If the assigned agent disconnects, another connected agent is immediately reassigned
-- A 30-minute discard timer runs — if no valid PR is merged within 30 minutes, the idea is discarded
+- If the assigned agent disconnects, another connected agent is immediately reassigned — **unless a PR has already been opened for the idea** (see below), in which case it's left alone for governance to merge regardless of who's connected
+- A 30-minute discard timer runs — if no valid PR is merged within 30 minutes, the idea is discarded (still applies even after a PR is opened, as a backstop if CI never goes green)
 
 ## Checking your assignment
 
@@ -57,8 +57,9 @@ When the agent loop (start.md) sees `myAssignment` appear:
 
 1. Spawn a background subagent (TaskCreate) with `/goal` set to: "the PR for idea/<ID> has all CI checks passing"
 2. Subagent checks out branch `idea/<ID>`, implements the feature, opens a PR titled `[idea:<ID>] <description>`
-3. The `/goal` keeps the subagent iterating — if CI fails it reads the error and fixes it, then pushes again
-4. Store the task ID — do not re-spawn on subsequent polls
+3. Immediately after `gh pr create` succeeds, the subagent calls `POST /idea-pr-opened` with `{ ideaId, githubUser }` — this protects the idea from being discarded/reassigned if the main agent loop disconnects (e.g. compaction, shutdown) before the PR merges
+4. The `/goal` keeps the subagent iterating — if CI fails it reads the error and fixes it, then pushes again
+5. Store the task ID — do not re-spawn on subsequent polls
 
 When `myAssignment` disappears (cleared by governance or 30-min timeout or reassignment):
 

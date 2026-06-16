@@ -31,6 +31,7 @@ let CHARACTER_NAME = process.env.CHARACTER_NAME || 'Wolf';
 let githubUser = null;
 
 let moveCount = 0;
+let lastProposedAt = 0;
 const PROPOSE_EVERY = 3;
 const COMPACT_EVERY = 10;
 
@@ -360,6 +361,7 @@ async function handleRequest(req, res) {
           signal: AbortSignal.timeout(8000),
         });
         const json = await upstream.json();
+        if (upstream.ok) lastProposedAt = moveCount;
         res.writeHead(upstream.status, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(json));
       } catch (err) {
@@ -432,7 +434,13 @@ async function handleRequest(req, res) {
 
   if (method === 'POST' && url === '/compact') {
     log(`=== COMPACTION at move #${moveCount} — continuation spawned ===`);
+    if (page) {
+      try {
+        await page.evaluate((m) => console.log(`[agent] compaction at move #${m}`), moveCount);
+      } catch (_) {}
+    }
     moveCount = 0;
+    lastProposedAt = 0;
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true }));
     return;
@@ -475,8 +483,12 @@ async function handleRequest(req, res) {
         } catch (_) {}
       }
 
-      const propose_idea = moveCount > 0 && moveCount % PROPOSE_EVERY === 0 ? 1 : 0;
-      const compact = moveCount > 0 && moveCount % COMPACT_EVERY === 0 ? 1 : 0;
+      // Sticky: fire as soon as moveCount reaches the threshold and stay fired
+      // until acknowledged (vote/submit-idea, or /compact). Exact-match (%)
+      // would get silently skipped if /state isn't polled on that exact move.
+      const sinceLastPropose = moveCount - lastProposedAt;
+      const propose_idea = sinceLastPropose >= PROPOSE_EVERY ? 1 : 0;
+      const compact = moveCount >= COMPACT_EVERY ? 1 : 0;
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ position, nearbyPlayers, myAssignment, pendingIdeas, propose_idea, compact, moveCount }));

@@ -217,6 +217,7 @@ function promoteIdea(idea) {
     assignedCharacterName,
     assignedAt: new Date(),
     beingImplemented: false,
+    prOpened: false,
   };
   addIdeaEvent('promoted', { id: idea.id, description: idea.description, assignedAgent: assignedCharacterName });
 
@@ -450,6 +451,18 @@ app.post('/idea-implementing', (req, res) => {
   res.json({ ok: true });
 });
 
+// Implementor calls this after `gh pr create` succeeds — once a PR exists,
+// disconnects must not discard/reassign the idea; governance will merge it
+// whenever CI goes green, regardless of who's still connected.
+app.post('/idea-pr-opened', (req, res) => {
+  const { ideaId, githubUser } = req.body || {};
+  if (!activeIdea || activeIdea.id !== ideaId) return res.status(404).json({ error: 'idea not active' });
+  if (activeIdea.assignedAgent !== githubUser) return res.status(403).json({ error: 'not assigned to you' });
+  activeIdea.prOpened = true;
+  addIdeaEvent('pr-opened', { id: ideaId, description: activeIdea.description });
+  res.json({ ok: true });
+});
+
 // Per-agent idea state — used by agent server to populate /state
 app.get('/idea-state/:githubUser', (req, res) => {
   const { githubUser } = req.params;
@@ -587,6 +600,10 @@ io.on('connection', (socket) => {
 
     // If the disconnected agent was the assigned implementor, reassign immediately
     if (activeIdea && activeIdea.assignedAgent === p.githubUser) {
+      if (activeIdea.prOpened) {
+        console.log(`[idea] Assigned agent ${p.githubUser} disconnected, but a PR is already open for "${activeIdea.description}" — leaving idea active for governance to merge`);
+        return;
+      }
       console.log(`[idea] Assigned agent ${p.githubUser} disconnected — reassigning`);
       const eligible = [...players.values()].filter(q => q.githubUser);
       if (eligible.length === 0) {
