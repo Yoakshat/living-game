@@ -1151,69 +1151,61 @@ function makeMapFragmentTexture(scene, key) {
   return { w: FRAGMENT_W, h: FRAGMENT_H };
 }
 
-// --- Meteor crater -----------------------------------------------------------
-// A glowing impact crater left behind after a shooting star lands at a map edge.
-// Orange/red bowl shape with a bright molten core and outward spatter lines.
-// Claimed craters fade out; unclaimed ones pulse with warm orange glow.
-const CRATER_W = 56;
-const CRATER_H = 56;
+// --- Explorer scroll --------------------------------------------------------
+// A glowing parchment scroll left on the ground by an explorer. Warm tan/yellow
+// base with a rolled-up appearance, a faint quill-nib mark, and a golden glow
+// ring to signal interactability. Proximity triggers a message tooltip.
+const SCROLL_W = 32;
+const SCROLL_H = 32;
 
-function makeMeteorCraterTexture(scene, key) {
+export function makeScrollTexture(scene, key) {
   const g = scene.make.graphics({ x: 0, y: 0, add: false });
-  const cx = CRATER_W / 2;
-  const cy = CRATER_H / 2;
+  const cx = SCROLL_W / 2;
+  const cy = SCROLL_H / 2;
 
-  // Outer debris/scorch ring — dark soot on the ground.
-  g.fillStyle(0x1a0800, 0.7);
-  g.fillEllipse(cx, cy, 54, 50);
+  // Ground shadow.
+  g.fillStyle(0x000000, 0.2);
+  g.fillEllipse(cx, SCROLL_H - 6, 22, 7);
 
-  // Crater rim — raised ring of scorched orange-brown earth.
-  g.fillStyle(0x6b2200, 1);
-  g.fillEllipse(cx, cy, 44, 40);
+  // Main parchment body — warm tan roll.
+  g.fillStyle(0xd9c070, 1);
+  g.fillRoundedRect(4, 10, SCROLL_W - 8, SCROLL_H - 18, 3);
 
-  // Mid-tone basin inside the rim.
-  g.fillStyle(0x9b3800, 1);
-  g.fillEllipse(cx, cy, 34, 30);
+  // Slightly lighter upper face (top-lit).
+  g.fillStyle(0xf0d88a, 0.8);
+  g.fillRoundedRect(5, 10, SCROLL_W - 10, 6, 2);
 
-  // Inner bowl — bright orange-red, hot rock.
-  g.fillStyle(0xdd4400, 1);
-  g.fillEllipse(cx, cy, 24, 20);
+  // Shadow on lower edge.
+  g.fillStyle(0xb09040, 0.8);
+  g.fillRoundedRect(4, SCROLL_H - 14, SCROLL_W - 8, 4, { tl: 0, tr: 0, br: 3, bl: 3 });
 
-  // Molten core glow.
-  g.fillStyle(0xff7700, 0.9);
-  g.fillEllipse(cx, cy, 16, 13);
+  // Rolled-end cylinders (left and right caps).
+  g.fillStyle(0xc8a83a, 1);
+  g.fillEllipse(5, cy + 1, 10, SCROLL_H - 18);
+  g.fillEllipse(SCROLL_W - 5, cy + 1, 10, SCROLL_H - 18);
 
-  // Bright yellow-white hot centre.
-  g.fillStyle(0xffdd44, 0.85);
-  g.fillEllipse(cx, cy, 8, 7);
+  // Highlight on left cap.
+  g.fillStyle(0xf0d46a, 0.6);
+  g.fillEllipse(4, cy, 4, SCROLL_H - 22);
 
-  // Specular highlight at the centre.
-  g.fillStyle(0xffffff, 0.5);
-  g.fillCircle(cx - 1, cy - 1, 2.5);
+  // Small quill-nib mark in the center.
+  g.lineStyle(1, 0x6b5530, 0.8);
+  g.beginPath();
+  g.moveTo(cx, cy - 3);
+  g.lineTo(cx, cy + 3);
+  g.strokePath();
+  g.beginPath();
+  g.moveTo(cx - 3, cy);
+  g.lineTo(cx + 3, cy);
+  g.strokePath();
 
-  // Spatter lines radiating outward — lava ejecta.
-  const spatterAngles = [0, 45, 90, 135, 180, 225, 270, 315];
-  for (const deg of spatterAngles) {
-    const rad = (deg * Math.PI) / 180;
-    const sx = cx + Math.cos(rad) * 22;
-    const sy = cy + Math.sin(rad) * 20;
-    g.lineStyle(1, 0xcc4400, 0.7);
-    g.beginPath();
-    g.moveTo(cx + Math.cos(rad) * 8, cy + Math.sin(rad) * 7);
-    g.lineTo(sx, sy);
-    g.strokePath();
-    // Small molten droplet at the tip of each spatter.
-    g.fillStyle(0xff6600, 0.65);
-    g.fillCircle(sx, sy, 2);
-  }
+  // Golden glow ring — signals this is something worth reading.
+  g.lineStyle(1.5, 0xffd700, 0.65);
+  g.strokeEllipse(cx, cy + 1, SCROLL_W - 2, SCROLL_H - 10);
 
-  // Outer glow halo — warm orange ambient light.
-  g.fillStyle(0xff4400, 0.1);
-  g.fillCircle(cx, cy, CRATER_W / 2);
-
-  g.generateTexture(key, CRATER_W, CRATER_H);
+  g.generateTexture(key, SCROLL_W, SCROLL_H);
   g.destroy();
-  return { w: CRATER_W, h: CRATER_H };
+  return { w: SCROLL_W, h: SCROLL_H };
 }
 
 // Generate everything; returns metadata the scene needs for sizing/bodies.
@@ -1256,8 +1248,8 @@ export function generateTextures(scene) {
   // Map fragment — collectible parchment scrap, scattered in distant corners.
   const mapFragment = makeMapFragmentTexture(scene, 'map-fragment');
 
-  // Meteor crater — glowing impact site left by a shooting star at the map edge.
-  const meteorCrater = makeMeteorCraterTexture(scene, 'meteor-crater');
+  // Explorer scroll — glowing parchment left on the ground by a player.
+  const scroll = makeScrollTexture(scene, 'scroll');
 
   return {
     tile: TILE,
@@ -1275,6 +1267,6 @@ export function generateTextures(scene) {
     runeStone,
     stoneArch,
     mapFragment,
-    meteorCrater,
+    scroll,
   };
 }

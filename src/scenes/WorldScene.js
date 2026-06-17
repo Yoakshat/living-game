@@ -15,6 +15,13 @@ const MOVE_EMIT_INTERVAL = 50;
 // 0 = no lerp (instant), 1 = never arrives. Good range: 0.15–0.3 per frame.
 const LERP_ALPHA = 0.2;
 
+// How long scrolls persist before disappearing (ms) — 10 minutes.
+const SCROLL_TTL = 10 * 60 * 1000;
+// How close a player must be to read a scroll (2 tiles in world pixels).
+const SCROLL_READ_DIST = 96;
+// Max characters allowed in an explorer note.
+const SCROLL_MAX_CHARS = 40;
+
 export default class WorldScene extends Phaser.Scene {
   constructor() {
     super('WorldScene');
@@ -30,6 +37,10 @@ export default class WorldScene extends Phaser.Scene {
     this._lastEmitTime = 0;
     // Game log panel
     this._gameLog = null;
+    // Explorer notes: array of { sprite, tooltip, message, expireAt }
+    this._scrolls = [];
+    // Whether the note-entry UI is open (prevents movement while typing).
+    this._noteInputOpen = false;
   }
 
   create() {
@@ -306,8 +317,14 @@ export default class WorldScene extends Phaser.Scene {
       down: Phaser.Input.Keyboard.KeyCodes.S,
       left: Phaser.Input.Keyboard.KeyCodes.A,
       right: Phaser.Input.Keyboard.KeyCodes.D,
+      note: Phaser.Input.Keyboard.KeyCodes.N,
     });
     this.input.keyboard.addCapture(['W', 'A', 'S', 'D']);
+
+    // N key — open note-entry overlay to leave an explorer scroll.
+    this.input.keyboard.on('keydown-N', () => {
+      if (!this._noteInputOpen) this._openNoteInput();
+    });
 
     // --- Introspection hook -------------------------------------------------
     const scene = this;
@@ -574,6 +591,11 @@ export default class WorldScene extends Phaser.Scene {
     socket.on('disconnect', (reason) => {
       console.warn('[multiplayer] disconnected:', reason);
     });
+
+    // A player placed a scroll — spawn it locally.
+    socket.on('scroll:placed', (data) => {
+      this._enqueue(() => this._spawnScroll(data.x, data.y, data.message, data.expireAt));
+    });
   }
 
   // Queue an event handler to run after scene is ready, or run immediately.
@@ -693,6 +715,216 @@ export default class WorldScene extends Phaser.Scene {
       })
       .setOrigin(0.5, 1)
       .setDepth(99999);
+  }
+
+  // ---- Explorer notes (scrolls) ---------------------------------------------
+
+  // Open an HTML overlay for the player to type a short note (up to 40 chars).
+  _openNoteInput() {
+    this._noteInputOpen = true;
+
+    // Dim overlay so the input reads clearly.
+    const overlay = document.createElement('div');
+    overlay.id = 'note-overlay';
+    overlay.style.cssText = [
+      'position:fixed',
+      'inset:0',
+      'display:flex',
+      'flex-direction:column',
+      'align-items:center',
+      'justify-content:center',
+      'background:rgba(0,0,0,0.55)',
+      'z-index:9999',
+      'font-family:"Palatino Linotype",Palatino,serif',
+    ].join(';');
+
+    const panel = document.createElement('div');
+    panel.style.cssText = [
+      'background:#1a1208',
+      'border:2px solid #c8a83a',
+      'border-radius:8px',
+      'padding:20px 28px',
+      'display:flex',
+      'flex-direction:column',
+      'gap:12px',
+      'max-width:360px',
+      'width:90%',
+    ].join(';');
+
+    const label = document.createElement('div');
+    label.textContent = 'Leave a note (up to 40 chars)';
+    label.style.cssText = 'color:#f0d88a;font-size:15px;';
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.maxLength = SCROLL_MAX_CHARS;
+    input.placeholder = 'A message for future explorers…';
+    input.style.cssText = [
+      'background:#2a1e08',
+      'border:1px solid #c8a83a',
+      'border-radius:4px',
+      'color:#f0d88a',
+      'font-family:"Palatino Linotype",Palatino,serif',
+      'font-size:14px',
+      'padding:8px 10px',
+      'outline:none',
+      'width:100%',
+      'box-sizing:border-box',
+    ].join(';');
+
+    const charCount = document.createElement('div');
+    charCount.textContent = '0 / 40';
+    charCount.style.cssText = 'color:#a08050;font-size:12px;text-align:right;';
+
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex;gap:10px;justify-content:flex-end;';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.style.cssText = [
+      'background:transparent',
+      'border:1px solid #807040',
+      'border-radius:4px',
+      'color:#a08050',
+      'cursor:pointer',
+      'font-family:"Palatino Linotype",Palatino,serif',
+      'font-size:13px',
+      'padding:6px 14px',
+    ].join(';');
+
+    const leaveBtn = document.createElement('button');
+    leaveBtn.textContent = 'Leave scroll';
+    leaveBtn.style.cssText = [
+      'background:#c8a83a',
+      'border:none',
+      'border-radius:4px',
+      'color:#1a1208',
+      'cursor:pointer',
+      'font-family:"Palatino Linotype",Palatino,serif',
+      'font-size:13px',
+      'font-weight:bold',
+      'padding:6px 14px',
+    ].join(';');
+
+    input.addEventListener('input', () => {
+      charCount.textContent = `${input.value.length} / 40`;
+    });
+
+    const close = (submit) => {
+      const msg = input.value.trim();
+      document.body.removeChild(overlay);
+      this._noteInputOpen = false;
+      // Re-focus the canvas so keyboard events resume.
+      this.game.canvas.focus();
+      if (submit && msg.length > 0) {
+        this._placeScroll(msg);
+      }
+    };
+
+    cancelBtn.addEventListener('click', () => close(false));
+    leaveBtn.addEventListener('click', () => close(true));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') close(true);
+      if (e.key === 'Escape') close(false);
+      e.stopPropagation(); // prevent game keys from firing
+    });
+
+    btnRow.appendChild(cancelBtn);
+    btnRow.appendChild(leaveBtn);
+    panel.appendChild(label);
+    panel.appendChild(input);
+    panel.appendChild(charCount);
+    panel.appendChild(btnRow);
+    overlay.appendChild(panel);
+    document.body.appendChild(overlay);
+    // Focus the input after appending.
+    setTimeout(() => input.focus(), 0);
+  }
+
+  // Place a scroll at the player's current position.
+  _placeScroll(message) {
+    const x = this.player.x;
+    const y = this.player.y;
+    const expireAt = Date.now() + SCROLL_TTL;
+
+    // Spawn the scroll locally.
+    this._spawnScroll(x, y, message, expireAt);
+
+    // Broadcast to other clients via socket.
+    if (this._socket && this._socket.connected) {
+      this._socket.emit('scroll:place', { x, y, message, expireAt });
+    }
+  }
+
+  // Spawn a scroll sprite + tooltip at world coordinates.
+  _spawnScroll(x, y, message, expireAt) {
+    const sprite = this.add
+      .image(x, y, 'scroll')
+      .setOrigin(0.5, 0.5)
+      .setDepth(y + this.meta.scroll.h / 2);
+
+    // Pulse glow tint (handled in update loop).
+    sprite.setTint(0xffd700);
+
+    // Tooltip text — hidden until the player walks near.
+    const tooltip = this.add
+      .text(x, y - 28, message, {
+        fontFamily: '"Palatino Linotype", Palatino, serif',
+        fontSize: '12px',
+        color: '#f0d88a',
+        stroke: '#1a1208',
+        strokeThickness: 3,
+        align: 'center',
+        wordWrap: { width: 180 },
+        backgroundColor: '#1a120880',
+        padding: { x: 6, y: 4 },
+      })
+      .setOrigin(0.5, 1)
+      .setDepth(99998)
+      .setAlpha(0);
+
+    const scrollEntry = { sprite, tooltip, message, expireAt };
+    this._scrolls.push(scrollEntry);
+
+    // Auto-remove after TTL.
+    const msLeft = expireAt - Date.now();
+    this.time.delayedCall(Math.max(msLeft, 0), () => {
+      this._removeScroll(scrollEntry);
+    });
+  }
+
+  _removeScroll(entry) {
+    entry.sprite.destroy();
+    entry.tooltip.destroy();
+    this._scrolls = this._scrolls.filter((s) => s !== entry);
+  }
+
+  // Called each update frame — handle scroll glow + proximity tooltips.
+  _updateScrolls(time) {
+    const pulse = 0.7 + 0.3 * Math.sin(time * 0.003);
+    const tint = Phaser.Display.Color.GetColor(
+      255,
+      Math.round(180 + pulse * 75),
+      Math.round(pulse * 60)
+    );
+
+    for (const entry of this._scrolls) {
+      entry.sprite.setTint(tint);
+
+      // Show/hide tooltip based on player proximity.
+      const dist = Phaser.Math.Distance.Between(
+        this.player.x, this.player.y,
+        entry.sprite.x, entry.sprite.y
+      );
+      const targetAlpha = dist < SCROLL_READ_DIST ? 1 : 0;
+      if (Math.abs(entry.tooltip.alpha - targetAlpha) > 0.05) {
+        entry.tooltip.setAlpha(
+          Phaser.Math.Linear(entry.tooltip.alpha, targetAlpha, 0.15)
+        );
+      } else {
+        entry.tooltip.setAlpha(targetAlpha);
+      }
+    }
   }
 
   // ---- Map fragment helpers --------------------------------------------------
@@ -871,6 +1103,12 @@ export default class WorldScene extends Phaser.Scene {
   update(time) {
     const k = this.keys;
     const body = this.player.body;
+
+    // Block movement while the note-entry overlay is open.
+    if (this._noteInputOpen) {
+      body.setVelocity(0, 0);
+      return;
+    }
 
     let vx = 0;
     let vy = 0;
@@ -1061,6 +1299,9 @@ export default class WorldScene extends Phaser.Scene {
         this.cameras.main.height
       );
     }
+
+    // Explorer scrolls: pulse glow + proximity tooltips.
+    this._updateScrolls(time);
 
     // Map fragments: pulse a soft golden glow and check for player pickup.
     const fragPulse = 0.5 + 0.5 * Math.sin(time * 0.0035);
