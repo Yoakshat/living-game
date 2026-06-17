@@ -70,6 +70,22 @@ export default class WorldScene extends Phaser.Scene {
     // Defined as { x, y, radius, type: 'hill'|'valley', label }
     this._elevationZones = null; // populated in create() after worldW/worldH are known
     this._currentElevation = 'flat'; // 'flat', 'hill', 'valley'
+    // Explorer journal — personal log of discoveries (persists this session).
+    this._journal = {
+      zonesVisited: new Set(),    // zone names visited
+      ruinsDiscovered: 0,         // count of ruins revealed
+      fragmentsCollected: 0,      // map fragments picked up
+      ideasProposed: [],          // idea IDs / titles submitted
+    };
+    // Whether the journal panel is open.
+    this._journalOpen = false;
+    // Remote player journals received via socket: Map<playerName, journal>
+    this._remoteJournals = new Map();
+    // Journal shrine icon near campfire (Graphics)
+    this._journalShrineGraphics = null;
+    // Whether the journal shrine prompt is visible.
+    this._journalShrinePromptVisible = false;
+    this._journalShrinePromptText = null;
   }
 
   create() {
@@ -177,6 +193,29 @@ export default class WorldScene extends Phaser.Scene {
     // Store campfire position for night-cycle glow
     this._campfireX = cfx;
     this._campfireY = cfy;
+
+    // --- Explorer journal shrine (glowing book icon near campfire) ----------
+    // Placed one tile south-east of the campfire so it's easy to find.
+    this._journalShrineX = cfx + T * 1.5;
+    this._journalShrineY = cfy + T * 1.5;
+    this._journalShrineGraphics = this.add.graphics();
+    this._journalShrineGraphics.setDepth(this._journalShrineY + 10);
+    this._drawJournalShrine(0); // initial draw
+
+    // Shrine proximity prompt (camera-fixed, below centre).
+    this._journalShrinePromptText = this.add
+      .text(0, 0, '[Walk up] Read journals', {
+        fontFamily: '"Palatino Linotype", Palatino, serif',
+        fontSize: '13px',
+        color: '#ffe9b0',
+        stroke: '#241a08',
+        strokeThickness: 3,
+        align: 'center',
+      })
+      .setOrigin(0.5, 1)
+      .setScrollFactor(0)
+      .setDepth(10004)
+      .setAlpha(0);
 
     // --- River (horizontal water strip, ~30% down the map) ------------------
     // Tiles row 6-8 (0-indexed), full width. Static bodies block passage.
@@ -490,6 +529,24 @@ export default class WorldScene extends Phaser.Scene {
     // N key — open note-entry overlay to leave an explorer scroll.
     this.input.keyboard.on('keydown-N', () => {
       if (!this._noteInputOpen) this._openNoteInput();
+    });
+
+    // J key — toggle personal explorer journal (or read shrine if nearby).
+    this.input.keyboard.on('keydown-J', () => {
+      if (this._journalOpen) {
+        this._closeJournal();
+      } else {
+        // If near the journal shrine, show all players' public journals.
+        const shrineDist = Phaser.Math.Distance.Between(
+          this.player.x, this.player.y,
+          this._journalShrineX, this._journalShrineY
+        );
+        if (shrineDist < this.meta.tile * 2.5) {
+          this._openShrineJournal();
+        } else {
+          this._openMyJournal();
+        }
+      }
     });
 
     // T key — claim territory (only if player has been still for 5 seconds).
@@ -1006,6 +1063,24 @@ export default class WorldScene extends Phaser.Scene {
         console.log('[chest] claimed by', data.playerName);
       });
     });
+
+    // Another player shared their journal — store it for shrine display.
+    socket.on('journal:update', (data) => {
+      this._enqueue(() => {
+        if (data.playerName && data.journal) {
+          this._remoteJournals.set(data.playerName, data.journal);
+          // If shrine journal is currently open, refresh the display.
+          if (this._journalOpen && document.getElementById('journal-overlay')) {
+            this._openShrineJournal();
+          }
+        }
+      });
+    });
+
+    // Server relays a request for all journals — respond with ours.
+    socket.on('journal:request_all', () => {
+      this._enqueue(() => this._emitJournal());
+    });
   }
 
   // Queue an event handler to run after scene is ready, or run immediately.
@@ -1031,6 +1106,9 @@ export default class WorldScene extends Phaser.Scene {
 
     // Register color for log panel
     if (this._gameLog) this._gameLog.setPlayerColor(name, color);
+
+    // Share initial journal with other players.
+    this._emitJournal();
 
     // Render all players already in the world.
     for (const other of others) {
@@ -1368,6 +1446,7 @@ export default class WorldScene extends Phaser.Scene {
         frag.collected = true;
         frag.sprite.destroy();
         this._fragmentsCollected++;
+        this._journal.fragmentsCollected++;
         this._fragmentCounterText.setText(this._fragmentCounterLabel());
 
         if (this._fragmentsCollected >= this._fragmentsTotal) {
@@ -1452,6 +1531,7 @@ export default class WorldScene extends Phaser.Scene {
           this._socket.emit('ruin:revealed', { ruinId: ruin.id, x: ruin.x, y: ruin.y });
         }
 
+        this._journal.ruinsDiscovered++;
         this._showToast('Ancient ruins discovered!', 2800);
         console.log('[ruins] ruin', ruin.id, 'revealed at', ruin.x, ruin.y);
       }
@@ -1590,9 +1670,11 @@ export default class WorldScene extends Phaser.Scene {
     const k = this.keys;
     const body = this.player.body;
 
-    // Block movement while the note-entry overlay is open.
-    if (this._noteInputOpen) {
+    // Block movement while the note-entry overlay or journal is open.
+    if (this._noteInputOpen || this._journalOpen) {
       body.setVelocity(0, 0);
+      // Still run the journal shrine update so the glow animates.
+      if (this._journalOpen) this._updateJournalShrine(time);
       return;
     }
 
@@ -1839,6 +1921,9 @@ export default class WorldScene extends Phaser.Scene {
 
     // Hidden ruins: reveal if any player is within 3 tiles (144px).
     this._checkRuinProximity();
+
+    // Journal shrine: animate glow and proximity prompt.
+    this._updateJournalShrine(time);
 
     // Footrace: update pulsing marker and check if local player reached destination.
     if (this._raceActive) {
@@ -2447,6 +2532,307 @@ export default class WorldScene extends Phaser.Scene {
         rp.sprite.setTint(Phaser.Display.Color.HexStringToColor(rp.color).color);
       }
     }
+  }
+
+  // ---- Explorer Journal -------------------------------------------------------
+
+  // Determine a descriptive zone name for the player's current world position.
+  _currentZoneName() {
+    const px = this.player.x / this.worldW;
+    const py = this.player.y / this.worldH;
+    const T = this.meta.tile;
+    // Cave: near the cave entrance (upper-right).
+    if (Phaser.Math.Distance.Between(this.player.x, this.player.y, this._caveX, this._caveY) < T * 3) {
+      return 'Cave Entrance';
+    }
+    // Campfire area: center.
+    if (Phaser.Math.Distance.Between(this.player.x, this.player.y, this._campfireX, this._campfireY) < T * 4) {
+      return 'Campfire';
+    }
+    // Healing spring.
+    if (Phaser.Math.Distance.Between(this.player.x, this.player.y, this._healingSpringX, this._healingSpringY) < T * 3) {
+      return 'Healing Spring';
+    }
+    // Well.
+    if (Phaser.Math.Distance.Between(this.player.x, this.player.y, this._wellX, this._wellY) < T * 3) {
+      return 'The Well';
+    }
+    // Beacon tower.
+    if (Phaser.Math.Distance.Between(this.player.x, this.player.y, this._beaconTowerX, this._beaconTowerY) < T * 3) {
+      return 'Imperial Beacon Tower';
+    }
+    // Meditation chamber.
+    if (Phaser.Math.Distance.Between(this.player.x, this.player.y, this._meditationChamberX, this._meditationChamberY) < T * 3) {
+      return 'Meditation Chamber';
+    }
+    // North bank (above river, y < 30%).
+    if (py < 0.30) return 'Northern Bank';
+    // River crossing (y around 25-33%).
+    if (py >= 0.24 && py <= 0.35 && px >= 0.60 && px <= 0.80) return 'Stone Bridge';
+    // River zone.
+    if (py >= 0.23 && py <= 0.37) return 'The River';
+    // Quadrant labels.
+    if (px < 0.5 && py < 0.5) return 'Northwest Wilds';
+    if (px >= 0.5 && py < 0.5) return 'Northeast Highlands';
+    if (px < 0.5 && py >= 0.5) return 'Southwest Lowlands';
+    return 'Southeast Badlands';
+  }
+
+  // Called from the update loop to track zone visits.
+  _trackZoneVisit() {
+    const zone = this._currentZoneName();
+    if (!this._journal.zonesVisited.has(zone)) {
+      this._journal.zonesVisited.add(zone);
+      // Broadcast updated journal to other players.
+      this._emitJournal();
+    }
+  }
+
+  // Emit this player's journal snapshot to all peers via socket.
+  _emitJournal() {
+    if (!this._socket || !this._socket.connected) return;
+    const name = this._selfName || 'Explorer';
+    this._socket.emit('journal:update', {
+      playerName: name,
+      journal: this._journalSnapshot(),
+    });
+  }
+
+  // Create a serialisable snapshot of the local journal.
+  _journalSnapshot() {
+    return {
+      zonesVisited: [...this._journal.zonesVisited],
+      ruinsDiscovered: this._journal.ruinsDiscovered,
+      fragmentsCollected: this._journal.fragmentsCollected,
+      ideasProposed: [...this._journal.ideasProposed],
+    };
+  }
+
+  // Draw the journal shrine icon (a glowing open book) at the shrine position.
+  _drawJournalShrine(time) {
+    const g = this._journalShrineGraphics;
+    g.clear();
+    const x = this._journalShrineX;
+    const y = this._journalShrineY;
+    const pulse = time ? 0.55 + 0.45 * Math.sin(time * 0.0025) : 0.8;
+
+    // Outer glow aura.
+    g.fillStyle(0xffd700, 0.18 * pulse);
+    g.fillCircle(x, y, 22);
+    g.fillStyle(0xffe9b0, 0.28 * pulse);
+    g.fillCircle(x, y, 14);
+
+    // Book cover (dark brown rectangle).
+    g.fillStyle(0x5c3a1e, 1);
+    g.fillRoundedRect(x - 9, y - 10, 18, 20, 2);
+
+    // Spine.
+    g.fillStyle(0x8b5a2b, 1);
+    g.fillRect(x - 9, y - 10, 4, 20);
+
+    // Pages (cream open book lines).
+    g.fillStyle(0xf5e6c8, 0.9);
+    g.fillRect(x - 4, y - 7, 10, 14);
+
+    // Lines on pages.
+    g.lineStyle(1, 0xa08050, 0.7);
+    for (let i = 0; i < 3; i++) {
+      g.beginPath();
+      g.moveTo(x - 3, y - 4 + i * 4);
+      g.lineTo(x + 5, y - 4 + i * 4);
+      g.strokePath();
+    }
+
+    // Golden glow dot at top (magic spark).
+    g.fillStyle(0xffd700, pulse);
+    g.fillCircle(x + 4, y - 12, 3);
+  }
+
+  // Called each update frame — animate shrine and show/hide proximity prompt.
+  _updateJournalShrine(time) {
+    // Track zone visit on every frame (cheap Set check).
+    this._trackZoneVisit();
+
+    this._drawJournalShrine(time);
+
+    const shrineDist = Phaser.Math.Distance.Between(
+      this.player.x, this.player.y,
+      this._journalShrineX, this._journalShrineY
+    );
+    const nearShrine = shrineDist < this.meta.tile * 2.5;
+
+    if (nearShrine !== this._journalShrinePromptVisible) {
+      this._journalShrinePromptVisible = nearShrine;
+      if (this._journalShrinePromptText) {
+        const targetAlpha = nearShrine ? 1 : 0;
+        this.tweens.add({
+          targets: this._journalShrinePromptText,
+          alpha: targetAlpha,
+          duration: 300,
+          ease: 'Sine.easeInOut',
+        });
+        if (nearShrine) {
+          const cam = this.cameras.main;
+          this._journalShrinePromptText.setPosition(cam.width / 2, cam.height - 32);
+        }
+      }
+    }
+  }
+
+  // Build and show the local player's own journal panel.
+  _openMyJournal() {
+    this._journalOpen = true;
+    this._emitJournal();
+    const snap = this._journalSnapshot();
+    this._buildJournalPanel('My Explorer Journal', [snap], false);
+  }
+
+  // Build and show all players' public journals (read at the shrine).
+  _openShrineJournal() {
+    this._journalOpen = true;
+    // Request all journals from peers via socket before opening.
+    if (this._socket && this._socket.connected) {
+      this._socket.emit('journal:request_all');
+    }
+    // Collect known journals (remote + self).
+    const myName = this._selfName || 'Explorer';
+    const allJournals = [];
+    // Self first.
+    allJournals.push({ playerName: myName, ...this._journalSnapshot() });
+    // Remotes.
+    for (const [name, j] of this._remoteJournals) {
+      if (name !== myName) allJournals.push({ playerName: name, ...j });
+    }
+    this._buildJournalPanel('Explorer Journals', allJournals, true);
+  }
+
+  // Close the journal panel.
+  _closeJournal() {
+    this._journalOpen = false;
+    const el = document.getElementById('journal-overlay');
+    if (el) document.body.removeChild(el);
+    this.game.canvas.focus();
+  }
+
+  // Build the journal HTML overlay.
+  // entries: array of { playerName?, zonesVisited[], ruinsDiscovered, fragmentsCollected, ideasProposed[] }
+  // isShrine: if true, show player name headers.
+  _buildJournalPanel(title, entries, isShrine) {
+    // Remove any existing panel first.
+    const existing = document.getElementById('journal-overlay');
+    if (existing) document.body.removeChild(existing);
+
+    const overlay = document.createElement('div');
+    overlay.id = 'journal-overlay';
+    overlay.style.cssText = [
+      'position:fixed',
+      'inset:0',
+      'display:flex',
+      'align-items:center',
+      'justify-content:center',
+      'background:rgba(0,0,0,0.60)',
+      'z-index:9999',
+      'font-family:"Palatino Linotype",Palatino,serif',
+    ].join(';');
+
+    const panel = document.createElement('div');
+    panel.style.cssText = [
+      'background:#100c06',
+      'border:2px solid #c8a83a',
+      'border-radius:10px',
+      'padding:22px 28px',
+      'max-width:440px',
+      'width:92%',
+      'max-height:80vh',
+      'overflow-y:auto',
+      'display:flex',
+      'flex-direction:column',
+      'gap:14px',
+      'box-shadow:0 0 32px #c8a83a44',
+    ].join(';');
+
+    // Title bar.
+    const titleEl = document.createElement('div');
+    titleEl.style.cssText = 'color:#f0d88a;font-size:18px;font-weight:bold;border-bottom:1px solid #5c3a1e;padding-bottom:8px;';
+    titleEl.textContent = title;
+    panel.appendChild(titleEl);
+
+    if (entries.length === 0) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'color:#8a7040;font-size:13px;font-style:italic;';
+      empty.textContent = 'No journals found yet.';
+      panel.appendChild(empty);
+    }
+
+    for (const entry of entries) {
+      const block = document.createElement('div');
+      block.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
+
+      if (isShrine && entry.playerName) {
+        const nameEl = document.createElement('div');
+        const col = this._remoteJournals.has(entry.playerName)
+          ? '#aaddff'
+          : '#ffd700'; // gold for self
+        nameEl.style.cssText = `color:${col};font-size:15px;font-weight:bold;`;
+        nameEl.textContent = `${entry.playerName}'s Journal`;
+        block.appendChild(nameEl);
+      }
+
+      const addRow = (label, value) => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;gap:8px;align-items:baseline;';
+        const lbl = document.createElement('span');
+        lbl.style.cssText = 'color:#a08050;font-size:12px;min-width:140px;flex-shrink:0;';
+        lbl.textContent = label;
+        const val = document.createElement('span');
+        val.style.cssText = 'color:#f0d88a;font-size:13px;';
+        val.textContent = value;
+        row.appendChild(lbl);
+        row.appendChild(val);
+        block.appendChild(row);
+      };
+
+      const zones = Array.isArray(entry.zonesVisited) ? entry.zonesVisited : [];
+      addRow('Zones visited:', zones.length > 0 ? zones.join(', ') : 'None yet');
+      addRow('Ruins discovered:', String(entry.ruinsDiscovered || 0));
+      addRow('Fragments collected:', String(entry.fragmentsCollected || 0));
+      const ideas = Array.isArray(entry.ideasProposed) ? entry.ideasProposed : [];
+      addRow('Ideas proposed:', ideas.length > 0 ? ideas.join(', ') : 'None yet');
+
+      if (isShrine) {
+        block.style.borderBottom = '1px solid #3a2a0e';
+        block.style.paddingBottom = '10px';
+      }
+
+      panel.appendChild(block);
+    }
+
+    // Close button.
+    const closeRow = document.createElement('div');
+    closeRow.style.cssText = 'display:flex;justify-content:flex-end;margin-top:4px;';
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = 'Close journal (J)';
+    closeBtn.style.cssText = [
+      'background:#c8a83a',
+      'border:none',
+      'border-radius:4px',
+      'color:#1a1208',
+      'cursor:pointer',
+      'font-family:"Palatino Linotype",Palatino,serif',
+      'font-size:13px',
+      'font-weight:bold',
+      'padding:7px 16px',
+    ].join(';');
+    closeBtn.addEventListener('click', () => this._closeJournal());
+    closeRow.appendChild(closeBtn);
+    panel.appendChild(closeRow);
+
+    overlay.appendChild(panel);
+    document.body.appendChild(overlay);
+    // Re-focus canvas when clicking overlay background (not panel).
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) this._closeJournal();
+    });
   }
 
   // Plant a glowing trail marker at world position (wx, wy) tagged with playerName.
