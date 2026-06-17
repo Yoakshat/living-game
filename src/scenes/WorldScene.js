@@ -86,6 +86,17 @@ export default class WorldScene extends Phaser.Scene {
     // Whether the journal shrine prompt is visible.
     this._journalShrinePromptVisible = false;
     this._journalShrinePromptText = null;
+
+    // Landmark echoes — tracks last visitor at each named landmark.
+    // Each entry: { name, x, y, lastVisitor, lastVisitTime, tooltip,
+    //               localDwellStart, tooltipShown }
+    this._landmarks = null; // populated in create() after worldW/worldH are known
+    // Proximity threshold for landmark echo (2 tiles ≈ 96px).
+    this._LANDMARK_ECHO_DIST = 96;
+    // Dwell time before showing tooltip (3 seconds).
+    this._LANDMARK_DWELL_MS = 3000;
+    // How long the tooltip stays visible (4 seconds).
+    this._LANDMARK_TOOLTIP_MS = 4000;
   }
 
   create() {
@@ -644,6 +655,39 @@ export default class WorldScene extends Phaser.Scene {
       callback: this._spawnTreasureChests,
       callbackScope: this,
     });
+
+    // --- Landmark echoes: named locations that record the last visitor ----------
+    // Positions match the visual landmarks placed earlier in create().
+    this._landmarks = [
+      { name: 'Campfire',            x: Math.round(this.worldW * 0.50), y: Math.round(this.worldH * 0.50) },
+      { name: 'The Well',            x: Math.round(this.worldW * 0.35), y: Math.round(this.worldH * 0.62) },
+      { name: 'Cave Entrance',       x: Math.round(this.worldW * 0.75), y: Math.round(this.worldH * 0.25) },
+      { name: 'Beacon Tower',        x: Math.round(this.worldW * 0.30), y: Math.round(this.worldH * 0.15) },
+      { name: 'Meditation Chamber',  x: Math.round(this.worldW * 0.55), y: Math.round(this.worldH * 0.12) },
+      { name: 'Healing Spring',      x: Math.round(this.worldW * 0.65), y: Math.round(this.worldH * 0.72) },
+    ].map((lm) => ({
+      ...lm,
+      lastVisitor: null,    // player name string or null
+      lastVisitTime: null,  // timestamp ms (Date.now()) or null
+      // Tooltip Phaser.Text object — created lazily, hidden until needed.
+      tooltip: this.add
+        .text(lm.x, lm.y - 32, '', {
+          fontFamily: '"Palatino Linotype", Palatino, serif',
+          fontSize: '12px',
+          color: '#ffe9b0',
+          stroke: '#241a08',
+          strokeThickness: 3,
+          align: 'center',
+          backgroundColor: '#1a120890',
+          padding: { x: 6, y: 4 },
+        })
+        .setOrigin(0.5, 1)
+        .setDepth(99997)
+        .setAlpha(0),
+      localDwellStart: null, // time.now when local player entered proximity
+      tooltipShown: false,   // debounce: true while tooltip is showing or was recently shown
+      localWasNear: false,   // was local player near last frame (for enter/leave detection)
+    }));
 
     // Mark scene ready — flush any queued events.
     this._ready = true;
@@ -1925,6 +1969,9 @@ export default class WorldScene extends Phaser.Scene {
     // Journal shrine: animate glow and proximity prompt.
     this._updateJournalShrine(time);
 
+    // Landmark echoes: track last visitor and show tooltips.
+    this._updateLandmarkEchoes(time);
+
     // Footrace: update pulsing marker and check if local player reached destination.
     if (this._raceActive) {
       this._drawRaceMarker(this._raceDestX, this._raceDestY);
@@ -2833,6 +2880,81 @@ export default class WorldScene extends Phaser.Scene {
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) this._closeJournal();
     });
+  }
+
+  // ---- Landmark echo system --------------------------------------------------
+  // Called each update frame. Checks proximity of all players to named landmarks,
+  // records the last visitor, and shows a tooltip to the local player after 3s dwell.
+  _updateLandmarkEchoes(time) {
+    if (!this._landmarks) return;
+
+    for (const lm of this._landmarks) {
+      // --- Step 1: Update last visitor from any player (local or remote) -------
+      // Check local player.
+      const localDist = Phaser.Math.Distance.Between(
+        this.player.x, this.player.y, lm.x, lm.y
+      );
+      if (localDist < this._LANDMARK_ECHO_DIST) {
+        const name = this._selfName || 'Explorer';
+        lm.lastVisitor = name;
+        lm.lastVisitTime = Date.now();
+      }
+
+      // Check remote players.
+      for (const [, rp] of this.remotePlayers) {
+        const d = Phaser.Math.Distance.Between(rp.sprite.x, rp.sprite.y, lm.x, lm.y);
+        if (d < this._LANDMARK_ECHO_DIST) {
+          // Extract name from the nameTag text object.
+          const remoteName = rp.nameTag ? rp.nameTag.text : 'Traveler';
+          lm.lastVisitor = remoteName;
+          lm.lastVisitTime = Date.now();
+        }
+      }
+
+      // --- Step 2: Track local player dwell time and show tooltip at 3s -------
+      const localNear = localDist < this._LANDMARK_ECHO_DIST;
+
+      if (localNear) {
+        // Start dwell timer when entering proximity.
+        if (!lm.localWasNear) {
+          lm.localDwellStart = time;
+        }
+
+        // Show tooltip once if dwell threshold reached and not already shown.
+        if (!lm.tooltipShown && lm.localDwellStart !== null &&
+            (time - lm.localDwellStart) >= this._LANDMARK_DWELL_MS &&
+            lm.lastVisitor !== null) {
+          lm.tooltipShown = true;
+          // Build tooltip text.
+          const elapsed = Date.now() - lm.lastVisitTime;
+          let timeStr;
+          if (elapsed < 60000) {
+            timeStr = 'moments ago';
+          } else {
+            const mins = Math.floor(elapsed / 60000);
+            timeStr = `${mins} min ago`;
+          }
+          lm.tooltip.setText(`Last here: ${lm.lastVisitor}, ${timeStr}`);
+          lm.tooltip.setAlpha(1);
+          // Hide tooltip after 4 seconds via tween.
+          this.tweens.add({
+            targets: lm.tooltip,
+            alpha: 0,
+            delay: this._LANDMARK_TOOLTIP_MS,
+            duration: 600,
+            ease: 'Sine.easeIn',
+          });
+        }
+      } else {
+        // Reset dwell and debounce when player leaves proximity.
+        if (lm.localWasNear) {
+          lm.localDwellStart = null;
+          lm.tooltipShown = false;
+        }
+      }
+
+      lm.localWasNear = localNear;
+    }
   }
 
   // Plant a glowing trail marker at world position (wx, wy) tagged with playerName.
