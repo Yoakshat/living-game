@@ -64,6 +64,16 @@ export default class WorldScene extends Phaser.Scene {
     // Treasure score for this session (counts local claims).
     this._treasureScore = 0;
 
+    // Landmark claiming — passive proximity system.
+    // Each landmark: { name, x, y, nameTag, ownerName, ownerColor, claimStartTime, lastSeenTime }
+    // nameTag is a Phaser Text object (null until claimed).
+    this._landmarks = null; // populated in create() after world dims are known
+    this._LANDMARK_CLAIM_DIST = 96;   // within 2 tiles (~96px) to be "near"
+    this._LANDMARK_CLAIM_SECS = 3000; // 3 continuous seconds to claim (ms)
+    this._LANDMARK_DECAY_MS = 2 * 60 * 1000; // 2 minutes away → unclaim
+    this._landmarkRulerAnnounced = null; // last announced ruler name
+    this._landmarkRulerCount = 0;        // how many landmarks the ruler controls
+
     // Elevation zones: hill and valley regions that affect movement speed and view radius.
     // Hills slow you 20% going uphill (entering), speed you 15% going downhill (leaving).
     // Standing on high ground extends view radius by 1.5 tiles during night.
@@ -644,6 +654,17 @@ export default class WorldScene extends Phaser.Scene {
       callback: this._spawnTreasureChests,
       callbackScope: this,
     });
+
+    // --- Landmark claiming setup -------------------------------------------
+    // The 6 named landmarks with their world positions (matches earlier placement).
+    this._landmarks = [
+      { name: 'Campfire',          x: Math.round(this.worldW / 2),           y: Math.round(this.worldH / 2),       nameTag: null, ownerName: null, ownerColor: null, claimStartTime: null, lastSeenTime: null },
+      { name: 'Well',              x: Math.round(this.worldW * 0.35),         y: Math.round(this.worldH * 0.62),    nameTag: null, ownerName: null, ownerColor: null, claimStartTime: null, lastSeenTime: null },
+      { name: 'Cave',              x: Math.round(this.worldW * 0.75),         y: Math.round(this.worldH * 0.25),    nameTag: null, ownerName: null, ownerColor: null, claimStartTime: null, lastSeenTime: null },
+      { name: 'Beacon Tower',      x: Math.round(this.worldW * 0.30),         y: Math.round(this.worldH * 0.15),    nameTag: null, ownerName: null, ownerColor: null, claimStartTime: null, lastSeenTime: null },
+      { name: 'Meditation Chamber',x: Math.round(this.worldW * 0.55),         y: Math.round(this.worldH * 0.12),    nameTag: null, ownerName: null, ownerColor: null, claimStartTime: null, lastSeenTime: null },
+      { name: 'Healing Spring',    x: Math.round(this.worldW * 0.65),         y: Math.round(this.worldH * 0.72),    nameTag: null, ownerName: null, ownerColor: null, claimStartTime: null, lastSeenTime: null },
+    ];
 
     // Mark scene ready — flush any queued events.
     this._ready = true;
@@ -2014,6 +2035,9 @@ export default class WorldScene extends Phaser.Scene {
     // Update territory visuals (pulse glow, check revisit reset, remote player tints).
     this._updateTerritories(time);
 
+    // Landmark claiming: passive proximity-based system.
+    this._updateLandmarkClaiming(time);
+
     // Rune stone proximity: show/hide cryptic message within ~96px (2 tiles).
     const RUNE_TRIGGER_DIST = 96;
     const runeDist = Phaser.Math.Distance.Between(
@@ -2833,6 +2857,153 @@ export default class WorldScene extends Phaser.Scene {
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) this._closeJournal();
     });
+  }
+
+  // ---- Landmark claiming (passive proximity) ---------------------------------
+
+  // Called each update frame. For each named landmark:
+  //   - If local player is within 2 tiles for 3 continuous seconds → claim it.
+  //   - If the landmark is claimed and owner hasn't been seen for 2 minutes → reset.
+  //   - Tracks the Ruler (player controlling the most landmarks) and logs it.
+  _updateLandmarkClaiming(time) {
+    if (!this._landmarks) return;
+
+    const px = this.player.x;
+    const py = this.player.y;
+    const myName = this._selfName || 'Explorer';
+    const myColor = this._selfColor || '#ffffff';
+
+    const serverUrl =
+      (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_SERVER_URL)
+        ? import.meta.env.VITE_SERVER_URL
+        : 'https://living-game-server-production.up.railway.app';
+
+    for (const lm of this._landmarks) {
+      const dist = Phaser.Math.Distance.Between(px, py, lm.x, lm.y);
+      const nearNow = dist < this._LANDMARK_CLAIM_DIST;
+
+      // ── Decay: reset claim if owner has been away for 2+ minutes ──
+      if (lm.ownerName !== null && lm.lastSeenTime !== null) {
+        if (time - lm.lastSeenTime > this._LANDMARK_DECAY_MS) {
+          this._unclaimLandmark(lm);
+        }
+      }
+
+      // ── Presence tracking ──
+      if (nearNow && lm.ownerName === myName) {
+        // Already ours — refresh last-seen to prevent decay.
+        lm.lastSeenTime = time;
+      }
+
+      // ── Claiming ──
+      if (nearNow && lm.ownerName !== myName) {
+        if (lm.claimStartTime === null) {
+          // Start the 3-second proximity timer.
+          lm.claimStartTime = time;
+        } else if (time - lm.claimStartTime >= this._LANDMARK_CLAIM_SECS) {
+          // 3 seconds elapsed — claim it!
+          this._claimLandmark(lm, myName, myColor, time, serverUrl);
+        }
+      } else if (!nearNow) {
+        // Reset the in-progress claim timer if player walked away.
+        if (lm.claimStartTime !== null && lm.ownerName !== myName) {
+          lm.claimStartTime = null;
+        }
+      }
+    }
+
+    // ── Ruler tracking ──
+    // Count owned landmarks per player.
+    const counts = {};
+    for (const lm of this._landmarks) {
+      if (lm.ownerName) {
+        counts[lm.ownerName] = (counts[lm.ownerName] || 0) + 1;
+      }
+    }
+
+    let rulerName = null;
+    let rulerCount = 0;
+    for (const [name, cnt] of Object.entries(counts)) {
+      if (cnt > rulerCount) {
+        rulerCount = cnt;
+        rulerName = name;
+      }
+    }
+
+    // Announce Ruler only when it changes and the leader controls at least 2 landmarks.
+    if (rulerName && rulerCount >= 2 &&
+        (rulerName !== this._landmarkRulerAnnounced || rulerCount !== this._landmarkRulerCount)) {
+      this._landmarkRulerAnnounced = rulerName;
+      this._landmarkRulerCount = rulerCount;
+      const msg = `👑 ${rulerName} is Ruler — controls ${rulerCount} landmark${rulerCount > 1 ? 's' : ''}`;
+      this._showToast(msg, 4000);
+      // Log to server so all players see the Ruler announcement.
+      fetch(`${serverUrl}/log-event`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ playerName: rulerName, message: msg, type: 'ruler' }),
+      }).catch((err) => console.warn('[landmark] log-event failed:', err));
+    } else if (!rulerName || rulerCount < 2) {
+      // Reset so the next ruler will be freshly announced.
+      this._landmarkRulerAnnounced = null;
+      this._landmarkRulerCount = 0;
+    }
+  }
+
+  // Set a landmark as claimed by ownerName.
+  _claimLandmark(lm, ownerName, ownerColor, time, serverUrl) {
+    // Remove old name tag if any.
+    if (lm.nameTag) {
+      lm.nameTag.destroy();
+      lm.nameTag = null;
+    }
+
+    lm.ownerName = ownerName;
+    lm.ownerColor = ownerColor;
+    lm.claimStartTime = null;
+    lm.lastSeenTime = time;
+
+    // Render claimer's name tag above the landmark sprite.
+    lm.nameTag = this.add
+      .text(lm.x, lm.y - 40, ownerName, {
+        fontFamily: 'Arial, sans-serif',
+        fontSize: '11px',
+        color: ownerColor,
+        stroke: '#000000',
+        strokeThickness: 3,
+        resolution: 2,
+      })
+      .setOrigin(0.5, 1)
+      .setDepth(lm.y + 9999);
+
+    const msg = `${ownerName} claimed ${lm.name}!`;
+    this._showToast(msg, 2500);
+    console.log('[landmark]', msg);
+
+    // Log claim to server.
+    if (serverUrl) {
+      fetch(`${serverUrl}/log-event`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ playerName: ownerName, message: msg, type: 'landmark' }),
+      }).catch((err) => console.warn('[landmark] log-event failed:', err));
+    }
+  }
+
+  // Reset a landmark to unclaimed state.
+  _unclaimLandmark(lm) {
+    if (lm.nameTag) {
+      lm.nameTag.destroy();
+      lm.nameTag = null;
+    }
+    const prevOwner = lm.ownerName;
+    lm.ownerName = null;
+    lm.ownerColor = null;
+    lm.claimStartTime = null;
+    lm.lastSeenTime = null;
+    if (prevOwner) {
+      console.log('[landmark]', lm.name, 'reverted to unclaimed (owner', prevOwner, 'away)');
+    }
   }
 
   // Plant a glowing trail marker at world position (wx, wy) tagged with playerName.
