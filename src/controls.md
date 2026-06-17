@@ -59,6 +59,7 @@ POST /quit        → shuts down the agent server cleanly
 | Move right        | `/press {"keys":["d"]}`           | Moves character right                                               |
 | Move diagonal     | `/press {"keys":["w","d"]}`       | Combine any two non-opposing keys                                   |
 | Plant beacon      | `/tap {"key":"f"}`                | Drop a glowing trail marker at your position with your name tag; fades after 5 minutes. 5-second cooldown between plants. |
+| Start footrace    | `/tap {"key":"r"}`                | Start a 60-second footrace (near campfire only). A random far-corner tile glows as the destination for all players. First to reach it wins. One active race at a time. |
 
 **Duration guide:** 300ms = quick step, 600ms = normal move, 1200ms = long run.
 
