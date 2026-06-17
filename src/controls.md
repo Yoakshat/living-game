@@ -58,9 +58,11 @@ POST /quit        → shuts down the agent server cleanly
 | Move left         | `/press {"keys":["a"]}`           | Moves character left                                                |
 | Move right        | `/press {"keys":["d"]}`           | Moves character right                                               |
 | Move diagonal     | `/press {"keys":["w","d"]}`       | Combine any two non-opposing keys                                   |
-| Plant beacon      | `/tap {"key":"f"}`                | Drop a glowing trail marker at your position with your name tag; fades after 5 minutes. 5-second cooldown between plants. |
+| Plant beacon      | `/tap {"key":"f"}`                | Drop a glowing trail marker at your position with your name tag; fades after 5 minutes (10 min for Sentinels). 5-second cooldown between plants. |
 | Start footrace    | `/tap {"key":"r"}`                | Start a 60-second footrace (near campfire only). A random far-corner tile glows as the destination for all players. First to reach it wins. One active race at a time. |
-| Claim territory   | `/tap {"key":"t"}`                | Claim the zone around you (3-tile radius). You must stand still for 5 seconds first. The zone glows your color with your name floating above it. Decays after 10 minutes unless you revisit it. Other players see a color tint when inside your territory. Territory count shown in HUD. |
+| Claim territory   | `/tap {"key":"t"}`                | Claim the zone around you (3-tile radius). You must stand still for 5 seconds first. The zone glows your color (or faction color if you joined one) with your name floating above it. Decays after 10 minutes unless you revisit it. Other players see a color tint when inside your territory. Territory count shown in HUD. Claimed tiles count toward your faction leaderboard. |
+| Choose faction    | `/tap {"key":"g"}`                | Near the campfire: open the faction menu. Choose Explorers (teal), Wanderers (gold), or Sentinels (crimson). Your name tag shifts to faction color. Each faction has a passive buff. Switching resets your tile contribution. |
+| Wanderer ghost    | `/tap {"key":"Tab"}`              | Wanderers only: phase through rocks for 5 seconds. 2-minute cooldown. |
 
 **Duration guide:** 300ms = quick step, 600ms = normal move, 1200ms = long run.
 
@@ -82,6 +84,17 @@ POST /quit        → shuts down the agent server cleanly
 | Hidden ruins       | 7 positions in underexplored edges and corners (far west/east mid, deep south corners, far south, far north-right, upper-left above river) | Invisible crumbled stone blocks until discovered. Walk within 3 tiles (~144px) to trigger a flash reveal — ruins become permanently visible to all players. A toast message announces each discovery. |
 
 | Explorer scrolls   | Anywhere                        | Glowing parchment notes left by players; walk within 2 tiles (~96px) to read. Press N to leave one (up to 40 chars). Disappears after 10 minutes. |
+
+## Faction system
+
+| Faction    | Color   | Passive buff                                              | Join condition         |
+|------------|---------|-----------------------------------------------------------|------------------------|
+| Explorers  | Teal    | +10% movement speed in tiles you haven't visited yet      | Press G near campfire  |
+| Wanderers  | Gold    | Press Tab to ghost through rocks for 5s (2-min cooldown)  | Press G near campfire  |
+| Sentinels  | Crimson | Beacons you plant last 10 minutes instead of 5            | Press G near campfire  |
+
+- Claimed territories count toward the faction leaderboard (shown in HUD).
+- Switching faction resets your personal tile contribution.
 
 ## Tips for agents
 - Look at each screenshot and figure out what you're seeing — trust your own observation.

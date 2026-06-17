@@ -22,6 +22,13 @@ const SCROLL_READ_DIST = 96;
 // Max characters allowed in an explorer note.
 const SCROLL_MAX_CHARS = 40;
 
+// Faction definitions: name, color (hex string), and passive buff description.
+const FACTIONS = {
+  Explorers: { color: '#00c8c8', colorInt: 0x00c8c8, label: 'Explorers', buff: '+10% speed in undiscovered zones' },
+  Wanderers: { color: '#ffd700', colorInt: 0xffd700, label: 'Wanderers', buff: 'Ghost through rocks for 5s (Tab, 2min cd)' },
+  Sentinels: { color: '#dc143c', colorInt: 0xdc143c, label: 'Sentinels', buff: 'Beacons last 10 minutes instead of 5' },
+};
+
 export default class WorldScene extends Phaser.Scene {
   constructor() {
     super('WorldScene');
@@ -63,6 +70,21 @@ export default class WorldScene extends Phaser.Scene {
     this._treasureChests = [];
     // Treasure score for this session (counts local claims).
     this._treasureScore = 0;
+    // ---- Faction system -------------------------------------------------------
+    // Current faction: null | 'Explorers' | 'Wanderers' | 'Sentinels'
+    this._faction = null;
+    // Tile count contributed to faction this session.
+    this._factionTileCount = 0;
+    // Shared leaderboard: { Explorers: N, Wanderers: N, Sentinels: N }
+    this._factionLeaderboard = { Explorers: 0, Wanderers: 0, Sentinels: 0 };
+    // Track discovered zone tiles (tile key → true) for Explorer speed buff.
+    this._discoveredTiles = new Set();
+    // Wanderer ghost: can ghost through rocks for 5s every 2min.
+    this._wandererGhostActive = false;
+    this._wandererGhostEndTime = 0;
+    this._wandererGhostCooldownEnd = 0;
+    // Whether faction menu is open.
+    this._factionMenuOpen = false;
   }
 
   create() {
@@ -319,6 +341,31 @@ export default class WorldScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(10003);
 
+    // Faction HUD — shows current faction and leaderboard (top-left, below territories).
+    this._factionHUDText = this.add
+      .text(0, 40, 'Faction: None (G near campfire)', {
+        fontFamily: '"Palatino Linotype", Palatino, serif',
+        fontSize: '13px',
+        color: '#cccccc',
+        stroke: '#0a0a0a',
+        strokeThickness: 3,
+      })
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(10003);
+
+    this._factionLeaderboardText = this.add
+      .text(0, 56, '', {
+        fontFamily: '"Palatino Linotype", Palatino, serif',
+        fontSize: '12px',
+        color: '#aaaaaa',
+        stroke: '#0a0a0a',
+        strokeThickness: 3,
+      })
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(10003);
+
     // --- Hidden ruins (placed in underexplored areas at the edges/corners) ----
     // Ruins start invisible (alpha=0). When any player walks within 3 tiles
     // (~144px), the ruin flashes into view permanently for all players.
@@ -371,7 +418,7 @@ export default class WorldScene extends Phaser.Scene {
     this.player.setDepth(spawn.y);
     this.facing = 'down';
 
-    this.physics.add.collider(this.player, this.obstacles);
+    this._obstacleCollider = this.physics.add.collider(this.player, this.obstacles);
 
     // --- Camera -------------------------------------------------------------
     this.cameras.main.setBounds(0, 0, this.worldW, this.worldH);
@@ -431,6 +478,17 @@ export default class WorldScene extends Phaser.Scene {
     // T key — claim territory (only if player has been still for 5 seconds).
     this.input.keyboard.on('keydown-T', () => {
       this._tryClaimTerritory();
+    });
+
+    // G key — open faction selection menu (near campfire only).
+    this.input.keyboard.on('keydown-G', () => {
+      if (!this._factionMenuOpen) this._tryOpenFactionMenu();
+    });
+
+    // Tab key — Wanderer ghost ability (phase through rocks for 5s).
+    this.input.keyboard.on('keydown-TAB', (event) => {
+      event.preventDefault();
+      this._tryWandererGhost();
     });
 
     // --- Introspection hook -------------------------------------------------
@@ -912,6 +970,15 @@ export default class WorldScene extends Phaser.Scene {
       console.warn('[multiplayer] disconnected:', reason);
     });
 
+    // Another player joined a faction — update leaderboard totals.
+    socket.on('faction:tile', (data) => {
+      this._enqueue(() => {
+        if (data.faction && this._factionLeaderboard.hasOwnProperty(data.faction)) {
+          this._factionLeaderboard[data.faction] = (this._factionLeaderboard[data.faction] || 0) + 1;
+        }
+      });
+    });
+
     // A player placed a scroll — spawn it locally.
     socket.on('scroll:placed', (data) => {
       this._enqueue(() => this._spawnScroll(data.x, data.y, data.message, data.expireAt));
@@ -931,6 +998,9 @@ export default class WorldScene extends Phaser.Scene {
       this._enqueue(() => {
         this._endRace();
         this._showToast(`🏆 ${data.winner} wins the footrace!`, 4000);
+      });
+    });
+
     // A player claimed a treasure chest — show crown toast announcement.
     socket.on('chest:claimed', (data) => {
       this._enqueue(() => {
@@ -1539,7 +1609,19 @@ export default class WorldScene extends Phaser.Scene {
     if (vx !== 0 || vy !== 0) {
       const len = Math.hypot(vx, vy);
       // Movement is 10% slower during rain.
-      const speed = this._isRaining ? PLAYER_SPEED * 0.9 : PLAYER_SPEED;
+      let speed = this._isRaining ? PLAYER_SPEED * 0.9 : PLAYER_SPEED;
+      // Explorer faction: +10% speed in undiscovered zones.
+      if (this._faction === 'Explorers') {
+        const T = this.meta.tile;
+        const tx = Math.floor(this.player.x / T);
+        const ty = Math.floor(this.player.y / T);
+        const tileKey = `${tx},${ty}`;
+        if (!this._discoveredTiles.has(tileKey)) {
+          speed *= 1.1;
+        }
+        // Mark this tile as discovered.
+        this._discoveredTiles.add(tileKey);
+      }
       body.setVelocity((vx / len) * speed, (vy / len) * speed);
 
       let dir = this.facing;
@@ -1551,11 +1633,12 @@ export default class WorldScene extends Phaser.Scene {
       if (dir !== this.facing) {
         this.facing = dir;
         this.player.setTexture('player-' + dir);
-        // Re-apply tint after texture change.
-        if (this._selfColor) {
-          this.player.setTint(
-            Phaser.Display.Color.HexStringToColor(this._selfColor).color
-          );
+        // Re-apply tint after texture change — faction color overrides base color.
+        const activeTintColor = this._faction
+          ? FACTIONS[this._faction].colorInt
+          : (this._selfColor ? Phaser.Display.Color.HexStringToColor(this._selfColor).color : undefined);
+        if (activeTintColor !== undefined) {
+          this.player.setTint(activeTintColor);
         }
       }
     } else {
@@ -1749,8 +1832,13 @@ export default class WorldScene extends Phaser.Scene {
       const now = time;
       if (now - this._lastBeaconTime >= this._BEACON_COOLDOWN_MS) {
         this._lastBeaconTime = now;
-        this._plantBeacon(this.player.x, this.player.y, this._selfName || 'explorer', now);
-        this._showToast('Beacon planted! Fades in 5 minutes.', 2000);
+        // Sentinels get 10-minute beacon duration instead of 5.
+        const beaconLifetime = this._faction === 'Sentinels'
+          ? 10 * 60 * 1000
+          : this._BEACON_LIFETIME_MS;
+        this._plantBeacon(this.player.x, this.player.y, this._selfName || 'explorer', now, beaconLifetime);
+        const mins = beaconLifetime / 60000;
+        this._showToast(`Beacon planted! Fades in ${mins} minutes.`, 2000);
       } else {
         const remaining = Math.ceil((this._BEACON_COOLDOWN_MS - (now - this._lastBeaconTime)) / 1000);
         this._showToast(`Beacon cooling down… ${remaining}s`, 1200);
@@ -1762,7 +1850,8 @@ export default class WorldScene extends Phaser.Scene {
     for (let i = this._beacons.length - 1; i >= 0; i--) {
       const b = this._beacons[i];
       const age = now - b.plantedAt;
-      const lifeRatio = age / this._BEACON_LIFETIME_MS; // 0 → 1 over lifetime
+      const beaconLife = b.lifetime || this._BEACON_LIFETIME_MS;
+      const lifeRatio = age / beaconLife; // 0 → 1 over lifetime
 
       if (lifeRatio >= 1) {
         // Expired — destroy and remove.
@@ -1849,6 +1938,17 @@ export default class WorldScene extends Phaser.Scene {
         this._runeMsgText.setPosition(px, py);
       }
     }
+
+    // ---- Wanderer ghost: deactivate when timer expires -----------------------
+    if (this._wandererGhostActive && time >= this._wandererGhostEndTime) {
+      this._wandererGhostActive = false;
+      // Re-enable collision with obstacles.
+      if (this._obstacleCollider) this._obstacleCollider.active = true;
+      this._showToast('Ghost phase ended.', 1200);
+    }
+
+    // ---- Faction leaderboard sync via territories ---------------------------
+    this._updateFactionHUD();
 
     // ---- Weather: update rain particles each frame ---------------------------
     this._updateRain(delta);
@@ -2197,7 +2297,20 @@ export default class WorldScene extends Phaser.Scene {
       }
     }
 
-    this._placeTerritory(px, py, this._selfName || 'Explorer', this._selfColor || '#ffffff', now);
+    // Use faction color if in a faction, otherwise own color.
+    const claimColor = this._faction ? FACTIONS[this._faction].color : (this._selfColor || '#ffffff');
+    this._placeTerritory(px, py, this._selfName || 'Explorer', claimColor, now);
+
+    // Increment faction tile count for the leaderboard.
+    if (this._faction) {
+      this._factionTileCount++;
+      this._factionLeaderboard[this._faction] = (this._factionLeaderboard[this._faction] || 0) + 1;
+      // Broadcast faction tile claim.
+      if (this._socket && this._socket.connected) {
+        this._socket.emit('faction:tile', { faction: this._faction });
+      }
+    }
+
     this._showToast('Territory claimed! (glows for 10 minutes)', 2200);
     console.log('[territory] claimed at', Math.round(px), Math.round(py));
   }
@@ -2292,9 +2405,12 @@ export default class WorldScene extends Phaser.Scene {
         break;
       }
     }
-    if (!insideForeignTerr && this._selfColor) {
-      // Restore own color.
-      this.player.setTint(Phaser.Display.Color.HexStringToColor(this._selfColor).color);
+    if (!insideForeignTerr) {
+      // Restore faction color (or own color if no faction).
+      const restoreTint = this._faction
+        ? FACTIONS[this._faction].colorInt
+        : (this._selfColor ? Phaser.Display.Color.HexStringToColor(this._selfColor).color : null);
+      if (restoreTint) this.player.setTint(restoreTint);
     }
 
     // Revisit detection: if local player enters their own territory, reset decay.
@@ -2335,8 +2451,9 @@ export default class WorldScene extends Phaser.Scene {
   }
 
   // Plant a glowing trail marker at world position (wx, wy) tagged with playerName.
-  // The beacon will pulse and fade over _BEACON_LIFETIME_MS milliseconds.
-  _plantBeacon(wx, wy, playerName, plantedAt) {
+  // The beacon will pulse and fade over lifetime milliseconds (default 5 minutes).
+  _plantBeacon(wx, wy, playerName, plantedAt, lifetime) {
+    const beaconLife = lifetime || this._BEACON_LIFETIME_MS;
     // Graphics object lives in world-space, drawn above the ground layer.
     const g = this.add.graphics();
     g.setDepth(wy + 50);
@@ -2354,8 +2471,224 @@ export default class WorldScene extends Phaser.Scene {
       .setOrigin(0.5, 1)
       .setDepth(wy + 51);
 
-    this._beacons.push({ graphics: g, nameTag: tag, x: wx, y: wy, plantedAt });
-    console.log(`[beacon] planted at (${Math.round(wx)}, ${Math.round(wy)}) by ${playerName}`);
+    this._beacons.push({ graphics: g, nameTag: tag, x: wx, y: wy, plantedAt, lifetime: beaconLife });
+    console.log(`[beacon] planted at (${Math.round(wx)}, ${Math.round(wy)}) by ${playerName}, lifetime ${beaconLife / 60000}min`);
+  }
+
+  // ---- Faction system -------------------------------------------------------
+
+  // Open the faction selection menu (near campfire only).
+  _tryOpenFactionMenu() {
+    const campfireDist = Phaser.Math.Distance.Between(
+      this.player.x, this.player.y,
+      this._campfireX, this._campfireY
+    );
+    const THREE_TILES = this.meta.tile * 3;
+    if (campfireDist > THREE_TILES) {
+      this._showToast('Approach the campfire to choose a faction. (G)', 1800);
+      return;
+    }
+    this._openFactionMenu();
+  }
+
+  _openFactionMenu() {
+    this._factionMenuOpen = true;
+
+    const overlay = document.createElement('div');
+    overlay.id = 'faction-overlay';
+    overlay.style.cssText = [
+      'position:fixed',
+      'inset:0',
+      'display:flex',
+      'flex-direction:column',
+      'align-items:center',
+      'justify-content:center',
+      'background:rgba(0,0,0,0.6)',
+      'z-index:9999',
+      'font-family:"Palatino Linotype",Palatino,serif',
+    ].join(';');
+
+    const panel = document.createElement('div');
+    panel.style.cssText = [
+      'background:#12100a',
+      'border:2px solid #c8a83a',
+      'border-radius:10px',
+      'padding:24px 32px',
+      'display:flex',
+      'flex-direction:column',
+      'gap:14px',
+      'max-width:380px',
+      'width:90%',
+    ].join(';');
+
+    const title = document.createElement('div');
+    title.textContent = 'Choose Your Faction';
+    title.style.cssText = 'color:#f0d88a;font-size:18px;font-weight:bold;text-align:center;';
+
+    const subtitle = document.createElement('div');
+    subtitle.textContent = this._faction
+      ? `Currently: ${this._faction} — switching resets your tile count.`
+      : 'Stand at the campfire and pledge your allegiance.';
+    subtitle.style.cssText = 'color:#a08060;font-size:13px;text-align:center;';
+
+    const btnContainer = document.createElement('div');
+    btnContainer.style.cssText = 'display:flex;flex-direction:column;gap:10px;';
+
+    const factionDefs = [
+      { key: 'Explorers', color: '#00c8c8', buff: '+10% speed in undiscovered zones' },
+      { key: 'Wanderers', color: '#ffd700', buff: 'Ghost through rocks 5s (Tab, 2min cd)' },
+      { key: 'Sentinels', color: '#dc143c', buff: 'Beacons last 10 minutes instead of 5' },
+    ];
+
+    const close = () => {
+      document.body.removeChild(overlay);
+      this._factionMenuOpen = false;
+      this.game.canvas.focus();
+    };
+
+    for (const fd of factionDefs) {
+      const btn = document.createElement('button');
+      const isActive = this._faction === fd.key;
+      btn.style.cssText = [
+        `background:${isActive ? fd.color + '33' : 'transparent'}`,
+        `border:2px solid ${fd.color}`,
+        'border-radius:6px',
+        `color:${fd.color}`,
+        'cursor:pointer',
+        'font-family:"Palatino Linotype",Palatino,serif',
+        'font-size:14px',
+        'padding:10px 16px',
+        'text-align:left',
+        'display:flex',
+        'flex-direction:column',
+        'gap:3px',
+      ].join(';');
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = fd.key + (isActive ? ' ✓' : '');
+      nameSpan.style.fontWeight = 'bold';
+      const buffSpan = document.createElement('span');
+      buffSpan.textContent = fd.buff;
+      buffSpan.style.cssText = 'font-size:11px;opacity:0.8;';
+      btn.appendChild(nameSpan);
+      btn.appendChild(buffSpan);
+
+      btn.addEventListener('click', () => {
+        this._joinFaction(fd.key);
+        close();
+      });
+      btnContainer.appendChild(btn);
+    }
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.style.cssText = [
+      'background:transparent',
+      'border:1px solid #807040',
+      'border-radius:4px',
+      'color:#a08050',
+      'cursor:pointer',
+      'font-family:"Palatino Linotype",Palatino,serif',
+      'font-size:13px',
+      'padding:6px 14px',
+      'margin-top:4px',
+    ].join(';');
+    cancelBtn.addEventListener('click', close);
+
+    overlay.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') close();
+      e.stopPropagation();
+    });
+
+    panel.appendChild(title);
+    panel.appendChild(subtitle);
+    panel.appendChild(btnContainer);
+    panel.appendChild(cancelBtn);
+    overlay.appendChild(panel);
+    document.body.appendChild(overlay);
+    panel.focus();
+  }
+
+  // Join a faction (or switch). Resets tile contribution on switch.
+  _joinFaction(factionKey) {
+    if (this._faction === factionKey) {
+      this._showToast(`You are already a ${factionKey}!`, 1500);
+      return;
+    }
+    if (this._faction) {
+      // Switching — reset tile contribution.
+      this._factionTileCount = 0;
+    }
+    this._faction = factionKey;
+    const fd = FACTIONS[factionKey];
+
+    // Update name tag and player sprite tint to faction color.
+    this.player.setTint(fd.colorInt);
+    if (this._selfNameTag) {
+      this._selfNameTag.setStyle({ color: fd.color });
+    }
+
+    this._showToast(`Joined ${factionKey}! Buff: ${fd.buff}`, 3000);
+    this._updateFactionHUD();
+
+    // Emit faction join to server so others can see.
+    if (this._socket && this._socket.connected) {
+      this._socket.emit('faction:join', { faction: factionKey, color: fd.color });
+    }
+
+    console.log('[faction] joined', factionKey);
+  }
+
+  // Wanderer ghost ability — phase through rocks for 5 seconds (2-min cooldown).
+  _tryWandererGhost() {
+    if (this._faction !== 'Wanderers') return;
+    const now = this.time.now;
+    const GHOST_COOLDOWN = 2 * 60 * 1000; // 2 minutes
+    const GHOST_DURATION = 5 * 1000;       // 5 seconds
+
+    if (this._wandererGhostActive) {
+      this._showToast('Ghost phase already active!', 800);
+      return;
+    }
+    if (now < this._wandererGhostCooldownEnd) {
+      const secs = Math.ceil((this._wandererGhostCooldownEnd - now) / 1000);
+      this._showToast(`Ghost ability on cooldown: ${secs}s`, 1200);
+      return;
+    }
+
+    // Activate ghost — disable obstacle collider.
+    this._wandererGhostActive = true;
+    this._wandererGhostEndTime = now + GHOST_DURATION;
+    this._wandererGhostCooldownEnd = now + GHOST_COOLDOWN;
+    if (this._obstacleCollider) this._obstacleCollider.active = false;
+
+    // Flash the player semi-transparent.
+    this.player.setAlpha(0.45);
+    this._showToast('Wanderer ghost active! (5s)', 1800);
+
+    // Restore alpha after 5s.
+    this.time.delayedCall(GHOST_DURATION, () => {
+      if (this.player) this.player.setAlpha(1);
+    });
+
+    console.log('[faction] Wanderer ghost activated');
+  }
+
+  // Update faction HUD text.
+  _updateFactionHUD() {
+    if (!this._factionHUDText) return;
+    if (this._faction) {
+      const fd = FACTIONS[this._faction];
+      this._factionHUDText.setText(`Faction: ${this._faction} (tiles: ${this._factionTileCount})`);
+      this._factionHUDText.setStyle({ color: fd.color });
+    } else {
+      this._factionHUDText.setText('Faction: None  (press G near campfire)');
+      this._factionHUDText.setStyle({ color: '#cccccc' });
+    }
+    // Show leaderboard summary.
+    const lb = this._factionLeaderboard;
+    this._factionLeaderboardText.setText(
+      `Explorers:${lb.Explorers} | Wanderers:${lb.Wanderers} | Sentinels:${lb.Sentinels}`
+    );
   }
 }
 
