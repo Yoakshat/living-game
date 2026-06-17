@@ -469,6 +469,7 @@ async function handleRequest(req, res) {
 
       // Fetch idea state from game server
       let myAssignment = null;
+      let myAssignments = [];
       let pendingIdeas = [];
       if (githubUser) {
         try {
@@ -477,7 +478,8 @@ async function handleRequest(req, res) {
           });
           if (ideaRes.ok) {
             const ideaData = await ideaRes.json();
-            myAssignment = ideaData.myAssignment || null;
+            myAssignments = ideaData.myAssignments || [];
+            myAssignment = myAssignments[0] || null;
             pendingIdeas = ideaData.pendingIdeas || [];
           }
         } catch (_) {}
@@ -491,7 +493,7 @@ async function handleRequest(req, res) {
       const compact = moveCount >= COMPACT_EVERY ? 1 : 0;
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ position, nearbyPlayers, myAssignment, pendingIdeas, propose_idea, compact, moveCount }));
+      res.end(JSON.stringify({ position, nearbyPlayers, myAssignment, myAssignments, pendingIdeas, propose_idea, compact, moveCount }));
     } catch (err) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: err.message }));
