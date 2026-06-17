@@ -411,6 +411,27 @@ export default class WorldScene extends Phaser.Scene {
       callbackScope: this,
     });
 
+    // --- Dynamic weather system -----------------------------------------------
+    // Rain starts randomly every 3–8 minutes, lasts 30–90 seconds, then ends.
+    // After rain ends a rainbow briefly appears for 8 seconds.
+    this._isRaining = false;
+    // Dark overlay (camera-fixed) shown during rain.
+    this._rainOverlay = this.add.graphics();
+    this._rainOverlay.setScrollFactor(0);
+    this._rainOverlay.setDepth(9400);
+    this._rainOverlay.setAlpha(0);
+    // Rain particle emitter.
+    this._rainGraphics = null;
+    this._rainParticles = []; // array of { x, y, vx, vy }
+    this._rainLastUpdate = 0;
+    // Rainbow arc (shown after rain).
+    this._rainbowGraphics = this.add.graphics();
+    this._rainbowGraphics.setScrollFactor(0);
+    this._rainbowGraphics.setDepth(9300);
+    this._rainbowGraphics.setAlpha(0);
+    // Schedule first rain event.
+    this._scheduleNextRain();
+
     // Mark scene ready — flush any queued events.
     this._ready = true;
     for (const fn of this._eventQueue) fn();
@@ -1228,7 +1249,7 @@ export default class WorldScene extends Phaser.Scene {
   }
 
   // ---- Update loop ---------------------------------------------------------
-  update(time) {
+  update(time, delta) {
     const k = this.keys;
     const body = this.player.body;
 
@@ -1247,7 +1268,9 @@ export default class WorldScene extends Phaser.Scene {
 
     if (vx !== 0 || vy !== 0) {
       const len = Math.hypot(vx, vy);
-      body.setVelocity((vx / len) * PLAYER_SPEED, (vy / len) * PLAYER_SPEED);
+      // Movement is 10% slower during rain.
+      const speed = this._isRaining ? PLAYER_SPEED * 0.9 : PLAYER_SPEED;
+      body.setVelocity((vx / len) * speed, (vy / len) * speed);
 
       let dir = this.facing;
       if (Math.abs(vx) > Math.abs(vy)) {
@@ -1541,6 +1564,166 @@ export default class WorldScene extends Phaser.Scene {
         this._runeMsgBg.strokeRoundedRect(px - panelW / 2, py - panelH / 2, panelW, panelH, 6);
         this._runeMsgText.setPosition(px, py);
       }
+    }
+
+    // ---- Weather: update rain particles each frame ---------------------------
+    this._updateRain(delta);
+  }
+
+  // ---- Weather system -------------------------------------------------------
+
+  // Schedule the next rain event after a random 3–8 minute delay.
+  _scheduleNextRain() {
+    const delayMs = (3 + Math.random() * 5) * 60 * 1000; // 3–8 min
+    this.time.delayedCall(delayMs, () => this._startRain());
+  }
+
+  // Begin a rain event lasting 30–90 seconds.
+  _startRain() {
+    this._isRaining = true;
+
+    // Fade in the dark overlay.
+    this.tweens.add({
+      targets: this._rainOverlay,
+      alpha: 1,
+      duration: 2000,
+      ease: 'Sine.easeIn',
+    });
+
+    // Initialise rain particles (50 drops, camera-space coordinates).
+    const cam = this.cameras.main;
+    this._rainParticles = [];
+    for (let i = 0; i < 80; i++) {
+      this._rainParticles.push({
+        x: Math.random() * cam.width,
+        y: Math.random() * cam.height,
+        vx: 1.5,
+        vy: 12 + Math.random() * 6,
+        len: 8 + Math.random() * 8,
+        alpha: 0.4 + Math.random() * 0.4,
+      });
+    }
+
+    // Rain lasts 30–90 seconds.
+    const durationMs = (30 + Math.random() * 60) * 1000;
+    this.time.delayedCall(durationMs, () => this._stopRain());
+
+    console.log('[weather] rain started, duration', Math.round(durationMs / 1000), 's');
+  }
+
+  // End the rain event and show the rainbow.
+  _stopRain() {
+    this._isRaining = false;
+    this._rainParticles = [];
+
+    // Fade out the dark overlay.
+    this.tweens.add({
+      targets: this._rainOverlay,
+      alpha: 0,
+      duration: 2000,
+      ease: 'Sine.easeOut',
+    });
+
+    // Show rainbow for 8 seconds then fade.
+    this._drawRainbow();
+    this.tweens.add({
+      targets: this._rainbowGraphics,
+      alpha: 0.4,
+      duration: 1500,
+      ease: 'Sine.easeOut',
+      onComplete: () => {
+        this.time.delayedCall(6000, () => {
+          this.tweens.add({
+            targets: this._rainbowGraphics,
+            alpha: 0,
+            duration: 1500,
+            ease: 'Sine.easeIn',
+          });
+        });
+      },
+    });
+
+    // Schedule next rain.
+    this._scheduleNextRain();
+    console.log('[weather] rain stopped, rainbow showing');
+  }
+
+  // Draw a rainbow arc using camera-space coordinates.
+  _drawRainbow() {
+    const g = this._rainbowGraphics;
+    g.clear();
+
+    const cam = this.cameras.main;
+    const cx = cam.width / 2;
+    const cy = cam.height * 0.85; // arc origin near bottom-center
+
+    const colors = [0xff0000, 0xff8800, 0xffff00, 0x00cc00, 0x0066ff, 0x8800cc];
+    const baseR = Math.min(cam.width, cam.height) * 0.55;
+
+    for (let ci = 0; ci < colors.length; ci++) {
+      const r = baseR - ci * 10;
+      g.lineStyle(8, colors[ci], 1);
+      g.beginPath();
+      // Draw upper semicircle (Math.PI to 0 = left to right going up).
+      const steps = 60;
+      for (let s = 0; s <= steps; s++) {
+        const angle = Math.PI - (s / steps) * Math.PI;
+        const px = cx + Math.cos(angle) * r;
+        const py = cy - Math.sin(angle) * r;  // subtract so arc goes up
+        if (s === 0) {
+          g.moveTo(px, py);
+        } else {
+          g.lineTo(px, py);
+        }
+      }
+      g.strokePath();
+    }
+  }
+
+  // Draw rain streaks each frame (camera-space).
+  _updateRain(delta) {
+    if (!this._isRaining || this._rainParticles.length === 0) {
+      // Clear drop graphics when not raining.
+      if (this._rainDropGraphics) this._rainDropGraphics.clear();
+      return;
+    }
+
+    const cam = this.cameras.main;
+    const W = cam.width;
+    const H = cam.height;
+
+    // Redraw the dark overlay each frame with current dimensions.
+    this._rainOverlay.clear();
+    if (this._rainOverlay.alpha > 0.01) {
+      this._rainOverlay.fillStyle(0x000020, 0.3);
+      this._rainOverlay.fillRect(0, 0, W, H);
+    }
+
+    // Draw particles on a separate graphics object layered above the overlay.
+    if (!this._rainDropGraphics) {
+      this._rainDropGraphics = this.add.graphics();
+      this._rainDropGraphics.setScrollFactor(0);
+      this._rainDropGraphics.setDepth(9450);
+    }
+    const dg = this._rainDropGraphics;
+    dg.clear();
+
+    const dt = delta / 16.67; // normalise to 60fps
+    for (const p of this._rainParticles) {
+      // Move particle.
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+
+      // Wrap around.
+      if (p.y > H + p.len) { p.y = -p.len; p.x = Math.random() * W; }
+      if (p.x > W + p.len) { p.x = -p.len; }
+
+      // Draw streak.
+      dg.lineStyle(1, 0xaaddff, p.alpha);
+      dg.beginPath();
+      dg.moveTo(p.x, p.y);
+      dg.lineTo(p.x - p.vx * p.len * 0.5, p.y - p.vy * p.len * 0.5);
+      dg.strokePath();
     }
   }
 
