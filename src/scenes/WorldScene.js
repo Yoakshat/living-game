@@ -317,9 +317,18 @@ export default class WorldScene extends Phaser.Scene {
       down: Phaser.Input.Keyboard.KeyCodes.S,
       left: Phaser.Input.Keyboard.KeyCodes.A,
       right: Phaser.Input.Keyboard.KeyCodes.D,
-      note: Phaser.Input.Keyboard.KeyCodes.N,
+      beacon: Phaser.Input.Keyboard.KeyCodes.F,
     });
-    this.input.keyboard.addCapture(['W', 'A', 'S', 'D']);
+    this.input.keyboard.addCapture(['W', 'A', 'S', 'D', 'F']);
+
+    // --- Wanderer beacons ---------------------------------------------------
+    // Array of active beacons: { graphics, nameTag, x, y, plantedAt }
+    this._beacons = [];
+    // Cooldown: one beacon per 5 seconds to avoid spam.
+    this._lastBeaconTime = -Infinity;
+    this._BEACON_COOLDOWN_MS = 5000;
+    // Beacon lifetime: 5 minutes.
+    this._BEACON_LIFETIME_MS = 5 * 60 * 1000;
 
     // N key — open note-entry overlay to leave an explorer scroll.
     this.input.keyboard.on('keydown-N', () => {
@@ -1328,6 +1337,57 @@ export default class WorldScene extends Phaser.Scene {
     );
     this._runeStoneSprite.setTint(glowTint);
 
+    // ---- Wanderer beacons ---------------------------------------------------
+    // Plant a beacon when F is pressed (once per cooldown period).
+    if (Phaser.Input.Keyboard.JustDown(this.keys.beacon)) {
+      const now = time;
+      if (now - this._lastBeaconTime >= this._BEACON_COOLDOWN_MS) {
+        this._lastBeaconTime = now;
+        this._plantBeacon(this.player.x, this.player.y, this._selfName || 'explorer', now);
+        this._showToast('Beacon planted! Fades in 5 minutes.', 2000);
+      } else {
+        const remaining = Math.ceil((this._BEACON_COOLDOWN_MS - (now - this._lastBeaconTime)) / 1000);
+        this._showToast(`Beacon cooling down… ${remaining}s`, 1200);
+      }
+    }
+
+    // Update existing beacons: pulse glow, fade out near expiry, remove expired.
+    const now = time;
+    for (let i = this._beacons.length - 1; i >= 0; i--) {
+      const b = this._beacons[i];
+      const age = now - b.plantedAt;
+      const lifeRatio = age / this._BEACON_LIFETIME_MS; // 0 → 1 over lifetime
+
+      if (lifeRatio >= 1) {
+        // Expired — destroy and remove.
+        b.graphics.destroy();
+        b.nameTag.destroy();
+        this._beacons.splice(i, 1);
+        continue;
+      }
+
+      // Fade alpha: full for first 80%, then linear fade-out to 0.
+      const fadeAlpha = lifeRatio > 0.8 ? 1 - (lifeRatio - 0.8) / 0.2 : 1;
+
+      // Pulsing glow radius: base 12px, +4px sine wave.
+      const glowPulse = 0.5 + 0.5 * Math.sin(now * 0.003 + b.x * 0.01);
+      const glowR = 12 + glowPulse * 4;
+
+      b.graphics.clear();
+      // Outer soft glow ring (warm gold).
+      b.graphics.fillStyle(0xffd700, 0.25 * fadeAlpha);
+      b.graphics.fillCircle(b.x, b.y, glowR * 2.2);
+      // Inner bright core.
+      b.graphics.fillStyle(0xffe55c, 0.85 * fadeAlpha);
+      b.graphics.fillCircle(b.x, b.y, glowR);
+      // Tiny bright center dot.
+      b.graphics.fillStyle(0xffffff, fadeAlpha);
+      b.graphics.fillCircle(b.x, b.y, 4);
+
+      // Name tag alpha follows beacon alpha.
+      b.nameTag.setAlpha(fadeAlpha);
+    }
+
     // Rune stone proximity: show/hide cryptic message within ~96px (2 tiles).
     const RUNE_TRIGGER_DIST = 96;
     const runeDist = Phaser.Math.Distance.Between(
@@ -1363,6 +1423,32 @@ export default class WorldScene extends Phaser.Scene {
         this._runeMsgText.setPosition(px, py);
       }
     }
+  }
+
+  // ---- Wanderer beacon helpers ---------------------------------------------
+
+  // Plant a glowing trail marker at world position (wx, wy) tagged with playerName.
+  // The beacon will pulse and fade over _BEACON_LIFETIME_MS milliseconds.
+  _plantBeacon(wx, wy, playerName, plantedAt) {
+    // Graphics object lives in world-space, drawn above the ground layer.
+    const g = this.add.graphics();
+    g.setDepth(wy + 50);
+
+    // Name tag floats above the beacon pin.
+    const tag = this.add
+      .text(wx, wy - 22, playerName, {
+        fontFamily: 'Arial, sans-serif',
+        fontSize: '10px',
+        color: '#ffe55c',
+        stroke: '#000000',
+        strokeThickness: 3,
+        resolution: 2,
+      })
+      .setOrigin(0.5, 1)
+      .setDepth(wy + 51);
+
+    this._beacons.push({ graphics: g, nameTag: tag, x: wx, y: wy, plantedAt });
+    console.log(`[beacon] planted at (${Math.round(wx)}, ${Math.round(wy)}) by ${playerName}`);
   }
 }
 
