@@ -144,7 +144,7 @@ async function govern() {
     for (const pr of readyPRs) {
       const branch = pr.head.ref;
       try {
-        const result = git('merge', '-X', 'union', '--no-edit', `origin/${branch}`);
+        const result = git('merge', '-s', 'recursive', '-X', 'union', '--no-edit', `origin/${branch}`);
         log(`PR #${pr.number} (${branch}): ${result.split('\n')[0]}`);
         mergedNums.add(pr.number);
         const ideaId = extractIdeaId(pr.title);
