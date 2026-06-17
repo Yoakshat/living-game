@@ -345,10 +345,145 @@ export default class WorldScene extends Phaser.Scene {
         : 'http://localhost:3001';
     this._gameLog = new GameLog(logServerUrl);
 
+    // --- Meteor shower system ------------------------------------------------
+    // Every 8 minutes a shooting star animation crosses the sky and lands at a
+    // random map edge tile, leaving a glowing crater for 3 minutes. The first
+    // player to walk within 2 tiles earns a Meteor Hunter log entry + a point.
+    //
+    // Live craters: [{ sprite, x, y, spawnTime, claimed }]
+    this._meteors = [];
+    // Schedule the first meteor after 8 minutes, then repeat.
+    this.time.addEvent({
+      delay: 480000,
+      loop: true,
+      callback: this._spawnMeteor,
+      callbackScope: this,
+    });
+
     // Mark scene ready — flush any queued events.
     this._ready = true;
     for (const fn of this._eventQueue) fn();
     this._eventQueue = [];
+  }
+
+  // ---- Meteor shower ---------------------------------------------------------
+
+  // Pick a random edge tile position (top row, bottom row, left col, right col).
+  _randomEdgeTile() {
+    const T = this.meta.tile;
+    const edge = Math.floor(Math.random() * 4); // 0=top,1=bottom,2=left,3=right
+    let tx, ty;
+    if (edge === 0) {
+      tx = Math.floor(Math.random() * WORLD_TILES_X);
+      ty = 0;
+    } else if (edge === 1) {
+      tx = Math.floor(Math.random() * WORLD_TILES_X);
+      ty = WORLD_TILES_Y - 1;
+    } else if (edge === 2) {
+      tx = 0;
+      ty = Math.floor(Math.random() * WORLD_TILES_Y);
+    } else {
+      tx = WORLD_TILES_X - 1;
+      ty = Math.floor(Math.random() * WORLD_TILES_Y);
+    }
+    return { x: tx * T + T / 2, y: ty * T + T / 2 };
+  }
+
+  _spawnMeteor() {
+    const target = this._randomEdgeTile();
+
+    // Shooting star starts from the opposite corner of the screen, off-map.
+    // We pick a start point well outside the world bounds on the opposite side.
+    const startX = this.worldW - target.x + (Math.random() - 0.5) * 200;
+    const startY = -80 - Math.random() * 80;
+
+    // Create a small bright dot for the shooting star (camera-space independent).
+    const star = this.add.graphics();
+    star.setDepth(9999);
+    // Bright yellow-white comet dot with a small glow.
+    star.fillStyle(0xffffff, 1);
+    star.fillCircle(0, 0, 4);
+    star.fillStyle(0xffee44, 0.6);
+    star.fillCircle(0, 0, 7);
+    star.setPosition(startX, startY);
+
+    // Tween the star across the world to the edge tile over ~1.8 seconds.
+    this.tweens.add({
+      targets: star,
+      x: target.x,
+      y: target.y,
+      duration: 1800,
+      ease: 'Sine.easeIn',
+      onComplete: () => {
+        star.destroy();
+        this._placeCrater(target.x, target.y);
+      },
+    });
+  }
+
+  _placeCrater(wx, wy) {
+    const sprite = this.add
+      .image(wx, wy, 'meteor-crater')
+      .setOrigin(0.5, 0.5)
+      .setDepth(wy + this.meta.meteorCrater.h / 2);
+
+    this._meteors.push({
+      sprite,
+      x: wx,
+      y: wy,
+      spawnTime: this.time.now,
+      claimed: false,
+    });
+  }
+
+  _checkMeteors(time) {
+    const CRATER_LIFETIME = 3 * 60 * 1000; // 3 minutes
+    const CLAIM_DIST = this.meta.tile * 2;  // 2 tiles in world pixels
+    const serverUrl =
+      (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_SERVER_URL)
+        ? import.meta.env.VITE_SERVER_URL
+        : 'https://living-game-server-production.up.railway.app';
+
+    for (let i = this._meteors.length - 1; i >= 0; i--) {
+      const m = this._meteors[i];
+
+      // Remove expired craters.
+      if (time - m.spawnTime > CRATER_LIFETIME) {
+        m.sprite.destroy();
+        this._meteors.splice(i, 1);
+        continue;
+      }
+
+      // Pulse glow on unclaimed craters.
+      if (!m.claimed) {
+        const pulse = 0.6 + 0.4 * Math.sin(time * 0.004);
+        const glow = Phaser.Display.Color.GetColor(
+          255,
+          Math.round(100 + pulse * 80),
+          Math.round(pulse * 50)
+        );
+        m.sprite.setTint(glow);
+
+        // Check if local player is within 2 tiles.
+        const dist = Phaser.Math.Distance.Between(
+          this.player.x, this.player.y, m.x, m.y
+        );
+        if (dist < CLAIM_DIST) {
+          m.claimed = true;
+          // Dim the claimed crater.
+          m.sprite.setTint(0x886644);
+          // Log the Meteor Hunter event to the server.
+          const playerName = this._selfName || 'Explorer';
+          const msg = `${playerName} earns Meteor Hunter badge!`;
+          fetch(`${serverUrl}/log-event`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ playerName, message: msg }),
+          }).catch((err) => console.warn('[meteor] log-event failed:', err));
+          console.log('[meteor] Meteor Hunter claimed by', playerName);
+        }
+      }
+    }
   }
 
   _connectMultiplayer(spawn) {
@@ -938,6 +1073,9 @@ export default class WorldScene extends Phaser.Scene {
       if (!frag.collected) frag.sprite.setTint(fragTint);
     }
     this._checkFragmentPickups();
+
+    // Meteor craters: pulse glow, expire old craters, claim if player is close.
+    this._checkMeteors(time);
 
     // Rune stone glow pulse — a slow sine-wave tint cycle on the stone sprite.
     // Alternates between pale cyan-white and the base sprite color.

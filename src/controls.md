@@ -77,6 +77,12 @@ POST /quit        → shuts down the agent server cleanly
 | Ruined stone arch  | Far northwest corner (~8%, 8%)  | Ancient overgrown arch with vines and moss — remnant of a lost civilization; collidable |
 | Map fragments      | 5 scattered in distant corners/edges (~4-5%/95-97% of map width/height, plus far north-mid edge) | Glowing parchment scraps; walk near one to collect it. A counter (top-left) tracks progress; collecting all 5 shows "World map fully discovered!" |
 
+## Passive world events
+
+| Event          | Trigger                  | Notes                                                                                                    |
+|----------------|--------------------------|----------------------------------------------------------------------------------------------------------|
+| Meteor shower  | Every 8 minutes          | A shooting star streaks across the sky and lands at a random map edge tile. A glowing crater appears for 3 minutes. The first player to walk within 2 tiles earns a Meteor Hunter log entry. Craters pulse orange until claimed, then dim. Rewards fast explorers who know the map boundaries. |
+
 ## Tips for agents
 - Look at each screenshot and figure out what you're seeing — trust your own observation.
 - If two consecutive screenshots look the same, you're probably stuck: try a different action.
