@@ -22,6 +22,16 @@ const SCROLL_READ_DIST = 96;
 // Max characters allowed in an explorer note.
 const SCROLL_MAX_CHARS = 40;
 
+// Trail tile size: ~48px grid for tracking footsteps.
+const TRAIL_TILE = 48;
+// Number of visits before a tile becomes a worn dirt trail.
+const TRAIL_THRESHOLD = 3;
+// How long a trail persists after last visit (5 minutes in ms).
+const TRAIL_TTL = 5 * 60 * 1000;
+// Warm brown color for dirt trail, with ~40% alpha.
+const TRAIL_COLOR = 0x8B4513;
+const TRAIL_ALPHA = 0.4;
+
 export default class WorldScene extends Phaser.Scene {
   constructor() {
     super('WorldScene');
@@ -41,6 +51,14 @@ export default class WorldScene extends Phaser.Scene {
     this._scrolls = [];
     // Whether the note-entry UI is open (prevents movement while typing).
     this._noteInputOpen = false;
+    // Player-carved trails: map of "tx,ty" → { count, lastVisit, rect }
+    this._trailMap = new Map();
+    // The last trail tile the local player was on (to avoid duplicate counts).
+    this._lastTrailTile = null;
+    // Graphics layer for rendering trail dirt patches.
+    this._trailGraphics = null;
+    // Whether the trail layer needs a redraw.
+    this._trailDirty = false;
   }
 
   create() {
@@ -69,6 +87,11 @@ export default class WorldScene extends Phaser.Scene {
         if ((tx * ty) % 3 === 0) img.setFlipY(true);
       }
     }
+
+    // --- Trail layer (below obstacles and players) --------------------------
+    // Graphics object drawn just above the grass but below everything else.
+    this._trailGraphics = this.add.graphics();
+    this._trailGraphics.setDepth(1); // above grass (depth 0), below obstacles
 
     // --- Obstacles ----------------------------------------------------------
     this.obstacles = this.physics.add.staticGroup();
@@ -647,6 +670,11 @@ export default class WorldScene extends Phaser.Scene {
     // A player placed a scroll — spawn it locally.
     socket.on('scroll:placed', (data) => {
       this._enqueue(() => this._spawnScroll(data.x, data.y, data.message, data.expireAt));
+    });
+
+    // Another player formed or updated a trail tile — update locally.
+    socket.on('trail:update', (data) => {
+      this._enqueue(() => this._onTrailUpdate(data.tx, data.ty, data.count, data.lastVisit));
     });
   }
 
@@ -1428,6 +1456,10 @@ export default class WorldScene extends Phaser.Scene {
       );
     }
 
+    // Player-carved trails: track tile visits and render worn dirt paths.
+    this._updateTrails(time);
+    if (this._trailDirty) this._redrawTrails();
+
     // Explorer scrolls: pulse glow + proximity tooltips.
     this._updateScrolls(time);
 
@@ -1542,6 +1574,87 @@ export default class WorldScene extends Phaser.Scene {
         this._runeMsgText.setPosition(px, py);
       }
     }
+  }
+
+  // ---- Player-carved trails ------------------------------------------------
+
+  // Convert world pixel position to trail tile coordinates.
+  _worldToTrailTile(wx, wy) {
+    return {
+      tx: Math.floor(wx / TRAIL_TILE),
+      ty: Math.floor(wy / TRAIL_TILE),
+    };
+  }
+
+  // Called each update to track the local player's tile and increment visit count.
+  _updateTrails(time) {
+    const { tx, ty } = this._worldToTrailTile(this.player.x, this.player.y);
+    const key = `${tx},${ty}`;
+
+    // Only count a new visit when the player moves to a different tile.
+    const lastKey = this._lastTrailTile;
+    if (key === lastKey) {
+      // Expire old trails periodically (don't do it every frame — throttle).
+      return;
+    }
+    this._lastTrailTile = key;
+
+    const now = Date.now();
+    const existing = this._trailMap.get(key);
+    const prevCount = existing ? existing.count : 0;
+    const newCount = prevCount + 1;
+    const entry = { count: newCount, lastVisit: now };
+    this._trailMap.set(key, entry);
+
+    // If this tile meets or exceeds the threshold, mark it and broadcast.
+    if (newCount >= TRAIL_THRESHOLD) {
+      this._trailDirty = true;
+      if (this._socket && this._socket.connected) {
+        this._socket.emit('trail:update', { tx, ty, count: newCount, lastVisit: now });
+      }
+    }
+
+    // Also expire old trails on each tile step (cheap pass since map is small).
+    this._expireTrails(now);
+  }
+
+  // Remove trail entries that haven't been visited in TRAIL_TTL ms.
+  _expireTrails(now) {
+    let changed = false;
+    for (const [key, entry] of this._trailMap) {
+      if (entry.count >= TRAIL_THRESHOLD && now - entry.lastVisit > TRAIL_TTL) {
+        this._trailMap.delete(key);
+        changed = true;
+      }
+    }
+    if (changed) this._trailDirty = true;
+  }
+
+  // Handle an incoming trail:update event from another client.
+  _onTrailUpdate(tx, ty, count, lastVisit) {
+    const key = `${tx},${ty}`;
+    const existing = this._trailMap.get(key);
+    // Only update if the incoming data has a higher count or more recent visit.
+    if (!existing || count > existing.count || lastVisit > existing.lastVisit) {
+      this._trailMap.set(key, { count, lastVisit });
+      if (count >= TRAIL_THRESHOLD) {
+        this._trailDirty = true;
+      }
+    }
+  }
+
+  // Redraw the trail graphics layer from the current trail map.
+  _redrawTrails() {
+    this._trailGraphics.clear();
+    this._trailGraphics.fillStyle(TRAIL_COLOR, TRAIL_ALPHA);
+    for (const [key, entry] of this._trailMap) {
+      if (entry.count < TRAIL_THRESHOLD) continue;
+      const [tx, ty] = key.split(',').map(Number);
+      const wx = tx * TRAIL_TILE;
+      const wy = ty * TRAIL_TILE;
+      this._trailGraphics.fillRect(wx, wy, TRAIL_TILE, TRAIL_TILE);
+    }
+    this._trailDirty = false;
   }
 
   // ---- Wanderer beacon helpers ---------------------------------------------
