@@ -1297,6 +1297,103 @@ export function makeScrollTexture(scene, key) {
   return { w: SCROLL_W, h: SCROLL_H };
 }
 
+// --- Treasure chest ---------------------------------------------------------
+// A golden treasure chest with a latch, glowing on the ground. Used for the
+// edge-spawning competitive collection mechanic. Starts with a golden glow.
+const CHEST_W = 44;
+const CHEST_H = 40;
+
+function makeTreasureChestTexture(scene, key) {
+  const g = scene.make.graphics({ x: 0, y: 0, add: false });
+  const cx = CHEST_W / 2;
+  const cy = CHEST_H / 2 + 2;
+
+  // Ground shadow.
+  g.fillStyle(0x000000, 0.25);
+  g.fillEllipse(cx, CHEST_H - 5, 36, 10);
+
+  // Chest body (bottom half) — warm golden-brown.
+  g.fillStyle(0xb8860b, 1);
+  g.fillRoundedRect(4, cy, CHEST_W - 8, 14, 3);
+  // Chest lid (top half) — slightly lighter, domed top.
+  g.fillStyle(0xdaa520, 1);
+  g.fillRoundedRect(4, cy - 12, CHEST_W - 8, 14, { tl: 5, tr: 5, bl: 0, br: 0 });
+  // Subtle arc on the lid for a domed effect.
+  g.fillStyle(0xffd700, 0.5);
+  g.fillEllipse(cx, cy - 10, CHEST_W - 14, 8);
+
+  // Iron bands (horizontal straps across the chest).
+  g.fillStyle(0x4a3b10, 1);
+  // Mid band across the seam.
+  g.fillRect(4, cy - 2, CHEST_W - 8, 4);
+  // Top band near the top of lid.
+  g.fillRect(4, cy - 10, CHEST_W - 8, 3);
+  // Bottom band.
+  g.fillRect(4, cy + 9, CHEST_W - 8, 3);
+
+  // Vertical band divider.
+  g.fillStyle(0x4a3b10, 1);
+  g.fillRect(cx - 2, cy - 12, 4, 28);
+
+  // Iron corner brackets (small rectangles at corners).
+  g.fillStyle(0x5c4a18, 1);
+  g.fillRect(4, cy - 12, 6, 6);
+  g.fillRect(CHEST_W - 10, cy - 12, 6, 6);
+  g.fillRect(4, cy + 8, 6, 6);
+  g.fillRect(CHEST_W - 10, cy + 8, 6, 6);
+
+  // Latch / lock in the center — a small bright gold clasp.
+  g.fillStyle(0xffd700, 1);
+  g.fillRoundedRect(cx - 4, cy - 3, 8, 6, 2);
+  g.fillStyle(0xffe566, 0.9);
+  g.fillRoundedRect(cx - 3, cy - 2, 4, 2, 1);
+  // Lock keyhole.
+  g.fillStyle(0x2a1e00, 1);
+  g.fillCircle(cx, cy + 1, 1.8);
+
+  // Golden glow halo around the whole chest (signals "collectible").
+  g.lineStyle(2, 0xffd700, 0.45);
+  g.strokeRoundedRect(2, cy - 14, CHEST_W - 4, 30, 5);
+
+  // Highlight on top of lid.
+  g.fillStyle(0xffe97a, 0.35);
+  g.fillEllipse(cx - 4, cy - 13, 16, 5);
+
+  g.generateTexture(key, CHEST_W, CHEST_H);
+  g.destroy();
+  return { w: CHEST_W, h: CHEST_H };
+}
+
+// --- Meteor crater ----------------------------------------------------------
+// A scorched impact crater with a glowing ember center. Left behind when a
+// meteor strikes the world edge. Purely decorative — no collision.
+const CRATER_W = 52;
+const CRATER_H = 48;
+
+function makeMeteorCraterTexture(scene, key) {
+  const g = scene.make.graphics({ x: 0, y: 0, add: false });
+  const cx = CRATER_W / 2;
+  const cy = CRATER_H / 2 + 2;
+
+  // Scorched earth ring.
+  g.fillStyle(0x1a1008, 0.85);
+  g.fillEllipse(cx, cy, CRATER_W - 4, CRATER_H - 8);
+  // Dark crater depression.
+  g.fillStyle(0x0d0800, 1);
+  g.fillEllipse(cx, cy, CRATER_W - 14, CRATER_H - 18);
+  // Glowing ember center.
+  g.fillStyle(0xff6600, 0.6);
+  g.fillEllipse(cx, cy, 16, 12);
+  g.fillStyle(0xffaa00, 0.5);
+  g.fillEllipse(cx, cy - 1, 8, 6);
+  g.fillStyle(0xffee55, 0.4);
+  g.fillCircle(cx, cy - 1, 3);
+
+  g.generateTexture(key, CRATER_W, CRATER_H);
+  g.destroy();
+  return { w: CRATER_W, h: CRATER_H };
+}
+
 // Generate everything; returns metadata the scene needs for sizing/bodies.
 export function generateTextures(scene) {
   const grassVariants = 4;
@@ -1340,6 +1437,12 @@ export function generateTextures(scene) {
   // Hidden ruin — crumbled stone blocks with moss; starts invisible, revealed by proximity.
   const ruin = makeRuinTexture(scene, 'ruin');
 
+  // Treasure chest — golden chest that spawns at map edges for competitive collection.
+  const treasureChest = makeTreasureChestTexture(scene, 'treasure-chest');
+
+  // Meteor crater — scorched impact site left after a meteor shower event.
+  const meteorCrater = makeMeteorCraterTexture(scene, 'meteor-crater');
+
   return {
     tile: TILE,
     grassVariants,
@@ -1357,5 +1460,7 @@ export function generateTextures(scene) {
     stoneArch,
     mapFragment,
     ruin,
+    treasureChest,
+    meteorCrater,
   };
 }

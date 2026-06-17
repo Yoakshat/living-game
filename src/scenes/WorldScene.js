@@ -59,6 +59,10 @@ export default class WorldScene extends Phaser.Scene {
     this._lastPlayerX = null;
     this._lastPlayerY = null;
     this._territoryCountText = null;
+    // Treasure chests: array of { sprite, glowGraphics, x, y, spawnTime, claimed }
+    this._treasureChests = [];
+    // Treasure score for this session (counts local claims).
+    this._treasureScore = 0;
   }
 
   create() {
@@ -500,6 +504,25 @@ export default class WorldScene extends Phaser.Scene {
     this._rainbowGraphics.setAlpha(0);
     // Schedule first rain event.
     this._scheduleNextRain();
+    // --- Treasure chests -----------------------------------------------------
+    // Every 5 minutes, 3 glowing chests spawn at random distant map edges
+    // (>85% from center). The first player to walk within 2 tiles claims it:
+    // they get a crown toast announcement to all players and +1 treasure score.
+    // Unclaimed chests despawn after 5 minutes and respawn elsewhere.
+    this._CHEST_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+    this._CHEST_LIFETIME_MS = 5 * 60 * 1000; // 5 minutes until despawn
+    this._CHEST_COUNT = 3;
+    this._CHEST_CLAIM_DIST = this.meta.tile * 2; // 2 tiles = 96px
+
+    // Spawn the first batch immediately (small delay to let scene finish).
+    this.time.delayedCall(2000, () => this._spawnTreasureChests());
+    // Then repeat every 5 minutes.
+    this.time.addEvent({
+      delay: this._CHEST_INTERVAL_MS,
+      loop: true,
+      callback: this._spawnTreasureChests,
+      callbackScope: this,
+    });
 
     // Mark scene ready — flush any queued events.
     this._ready = true;
@@ -623,6 +646,161 @@ export default class WorldScene extends Phaser.Scene {
           }).catch((err) => console.warn('[meteor] log-event failed:', err));
           console.log('[meteor] Meteor Hunter claimed by', playerName);
         }
+      }
+    }
+  }
+
+  // ---- Treasure chest system -------------------------------------------------
+
+  // Pick a random world-edge position that is >85% of map half-size from center.
+  // This ensures chests appear near corners/edges, rewarding exploration.
+  _randomDistantEdgePos() {
+    const T = this.meta.tile;
+    const halfW = this.worldW / 2;
+    const halfH = this.worldH / 2;
+    const THRESHOLD = 0.85;
+
+    // Pick a random edge (top, bottom, left, right).
+    const edge = Math.floor(Math.random() * 4);
+    let x, y;
+    if (edge === 0) {
+      // Top edge — x anywhere from 85% to 100% from center on either side.
+      const sign = Math.random() > 0.5 ? 1 : -1;
+      x = halfW + sign * halfW * (THRESHOLD + Math.random() * (1 - THRESHOLD));
+      y = halfH - halfH * (THRESHOLD + Math.random() * (1 - THRESHOLD));
+    } else if (edge === 1) {
+      // Bottom edge.
+      const sign = Math.random() > 0.5 ? 1 : -1;
+      x = halfW + sign * halfW * (THRESHOLD + Math.random() * (1 - THRESHOLD));
+      y = halfH + halfH * (THRESHOLD + Math.random() * (1 - THRESHOLD));
+    } else if (edge === 2) {
+      // Left edge.
+      x = halfW - halfW * (THRESHOLD + Math.random() * (1 - THRESHOLD));
+      const sign = Math.random() > 0.5 ? 1 : -1;
+      y = halfH + sign * halfH * (THRESHOLD + Math.random() * (1 - THRESHOLD));
+    } else {
+      // Right edge.
+      x = halfW + halfW * (THRESHOLD + Math.random() * (1 - THRESHOLD));
+      const sign = Math.random() > 0.5 ? 1 : -1;
+      y = halfH + sign * halfH * (THRESHOLD + Math.random() * (1 - THRESHOLD));
+    }
+
+    // Clamp to world bounds with a small tile margin.
+    x = Phaser.Math.Clamp(x, T * 1.5, this.worldW - T * 1.5);
+    y = Phaser.Math.Clamp(y, T * 1.5, this.worldH - T * 1.5);
+    return { x: Math.round(x), y: Math.round(y) };
+  }
+
+  // Spawn a fresh batch of CHEST_COUNT treasure chests at distant edge positions.
+  // Any existing unclaimed chests are removed first.
+  _spawnTreasureChests() {
+    // Remove any remaining old chests.
+    for (const chest of this._treasureChests) {
+      if (chest.sprite) chest.sprite.destroy();
+      if (chest.glowGraphics) chest.glowGraphics.destroy();
+    }
+    this._treasureChests = [];
+
+    for (let i = 0; i < this._CHEST_COUNT; i++) {
+      const pos = this._randomDistantEdgePos();
+      this._placeChest(pos.x, pos.y);
+    }
+
+    console.log(`[chest] spawned ${this._CHEST_COUNT} treasure chests`);
+  }
+
+  _placeChest(wx, wy) {
+    const sprite = this.add
+      .image(wx, wy, 'treasure-chest')
+      .setOrigin(0.5, 0.5)
+      .setDepth(wy + this.meta.treasureChest.h / 2);
+
+    // Separate graphics layer for the animated glow ring.
+    const glowGraphics = this.add.graphics();
+    glowGraphics.setDepth(wy + this.meta.treasureChest.h / 2 - 1);
+
+    const entry = {
+      sprite,
+      glowGraphics,
+      x: wx,
+      y: wy,
+      spawnTime: this.time.now,
+      claimed: false,
+    };
+    this._treasureChests.push(entry);
+
+    // Auto-despawn after lifetime; respawn happens on the repeating timer.
+    this.time.delayedCall(this._CHEST_LIFETIME_MS, () => {
+      if (!entry.claimed) {
+        entry.sprite.destroy();
+        entry.glowGraphics.destroy();
+        this._treasureChests = this._treasureChests.filter((c) => c !== entry);
+        console.log('[chest] despawned unclaimed chest at', wx, wy);
+      }
+    });
+  }
+
+  // Called each update tick to animate chest glow and detect proximity claims.
+  _checkTreasureChests(time) {
+    const serverUrl =
+      (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_SERVER_URL)
+        ? import.meta.env.VITE_SERVER_URL
+        : 'https://living-game-server-production.up.railway.app';
+
+    for (const chest of this._treasureChests) {
+      if (chest.claimed) continue;
+
+      // Pulsing golden glow ring around the chest.
+      const pulse = 0.5 + 0.5 * Math.sin(time * 0.004 + chest.x * 0.01);
+      const glowAlpha = 0.3 + pulse * 0.35;
+      const glowR = 28 + pulse * 8;
+
+      chest.glowGraphics.clear();
+      chest.glowGraphics.fillStyle(0xffd700, glowAlpha * 0.4);
+      chest.glowGraphics.fillCircle(chest.x, chest.y, glowR * 1.4);
+      chest.glowGraphics.fillStyle(0xffee55, glowAlpha);
+      chest.glowGraphics.fillCircle(chest.x, chest.y, glowR);
+
+      // Apply golden tint pulse on the sprite itself.
+      const tintR = Math.round(255);
+      const tintG = Math.round(180 + pulse * 75);
+      const tintB = Math.round(0 + pulse * 30);
+      chest.sprite.setTint(Phaser.Display.Color.GetColor(tintR, tintG, tintB));
+
+      // Check if local player is within 2 tiles.
+      const dist = Phaser.Math.Distance.Between(
+        this.player.x, this.player.y, chest.x, chest.y
+      );
+      if (dist < this._CHEST_CLAIM_DIST) {
+        chest.claimed = true;
+        chest.glowGraphics.clear();
+        // Dim to show claimed state.
+        chest.sprite.setTint(0x886644);
+
+        this._treasureScore++;
+        const playerName = this._selfName || 'Explorer';
+        const msg = `👑 ${playerName} found a treasure chest! (+1 treasure)`;
+
+        // Show the announcement locally.
+        this._showToast(msg, 4000);
+
+        // Broadcast to all players via socket.
+        if (this._socket && this._socket.connected) {
+          this._socket.emit('chest:claimed', { playerName, score: this._treasureScore });
+        }
+
+        // Log the treasure claim event to the server leaderboard.
+        fetch(`${serverUrl}/log-event`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            playerName,
+            message: `${playerName} claimed a treasure chest! (total: ${this._treasureScore})`,
+            type: 'treasure',
+          }),
+        }).catch((err) => console.warn('[chest] log-event failed:', err));
+
+        console.log('[chest] claimed by', playerName, 'at', chest.x, chest.y);
       }
     }
   }
@@ -753,6 +931,12 @@ export default class WorldScene extends Phaser.Scene {
       this._enqueue(() => {
         this._endRace();
         this._showToast(`🏆 ${data.winner} wins the footrace!`, 4000);
+    // A player claimed a treasure chest — show crown toast announcement.
+    socket.on('chest:claimed', (data) => {
+      this._enqueue(() => {
+        const msg = `👑 ${data.playerName} found a treasure chest! (+1 treasure)`;
+        this._showToast(msg, 4000);
+        console.log('[chest] claimed by', data.playerName);
       });
     });
   }
@@ -1546,6 +1730,8 @@ export default class WorldScene extends Phaser.Scene {
       this._drawRaceMarker(this._raceDestX, this._raceDestY);
       this._checkRaceWin();
     }
+    // Treasure chests: animate glow and check for claims.
+    this._checkTreasureChests(time);
 
     // Rune stone glow pulse — a slow sine-wave tint cycle on the stone sprite.
     // Alternates between pale cyan-white and the base sprite color.
