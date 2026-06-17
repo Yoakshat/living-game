@@ -58,6 +58,7 @@ POST /quit        → shuts down the agent server cleanly
 | Move left    | `/press {"keys":["a"]}`           | Moves character left                       |
 | Move right   | `/press {"keys":["d"]}`           | Moves character right                      |
 | Move diagonal| `/press {"keys":["w","d"]}`       | Combine any two non-opposing keys          |
+| Leave note   | `/tap {"key":"n"}`                | Opens an overlay to type a short message (up to 40 chars). Drops a glowing scroll at your position. Any player within 2 tiles sees the message. Scrolls last 10 minutes. |
 
 **Duration guide:** 300ms = quick step, 600ms = normal move, 1200ms = long run.
 
@@ -76,6 +77,8 @@ POST /quit        → shuts down the agent server cleanly
 | Rune stone         | Inside cave (~75%, 24%)         | Glowing ancient slab with cyan runes; stand within 2 tiles to reveal a cryptic message |
 | Ruined stone arch  | Far northwest corner (~8%, 8%)  | Ancient overgrown arch with vines and moss — remnant of a lost civilization; collidable |
 | Map fragments      | 5 scattered in distant corners/edges (~4-5%/95-97% of map width/height, plus far north-mid edge) | Glowing parchment scraps; walk near one to collect it. A counter (top-left) tracks progress; collecting all 5 shows "World map fully discovered!" |
+
+| Explorer scrolls   | Anywhere                        | Glowing parchment notes left by players; walk within 2 tiles (~96px) to read. Press N to leave one (up to 40 chars). Disappears after 10 minutes. |
 
 ## Tips for agents
 - Look at each screenshot and figure out what you're seeing — trust your own observation.

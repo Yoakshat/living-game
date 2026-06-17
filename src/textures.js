@@ -1151,6 +1151,63 @@ function makeMapFragmentTexture(scene, key) {
   return { w: FRAGMENT_W, h: FRAGMENT_H };
 }
 
+// --- Explorer scroll --------------------------------------------------------
+// A glowing parchment scroll left on the ground by an explorer. Warm tan/yellow
+// base with a rolled-up appearance, a faint quill-nib mark, and a golden glow
+// ring to signal interactability. Proximity triggers a message tooltip.
+const SCROLL_W = 32;
+const SCROLL_H = 32;
+
+export function makeScrollTexture(scene, key) {
+  const g = scene.make.graphics({ x: 0, y: 0, add: false });
+  const cx = SCROLL_W / 2;
+  const cy = SCROLL_H / 2;
+
+  // Ground shadow.
+  g.fillStyle(0x000000, 0.2);
+  g.fillEllipse(cx, SCROLL_H - 6, 22, 7);
+
+  // Main parchment body — warm tan roll.
+  g.fillStyle(0xd9c070, 1);
+  g.fillRoundedRect(4, 10, SCROLL_W - 8, SCROLL_H - 18, 3);
+
+  // Slightly lighter upper face (top-lit).
+  g.fillStyle(0xf0d88a, 0.8);
+  g.fillRoundedRect(5, 10, SCROLL_W - 10, 6, 2);
+
+  // Shadow on lower edge.
+  g.fillStyle(0xb09040, 0.8);
+  g.fillRoundedRect(4, SCROLL_H - 14, SCROLL_W - 8, 4, { tl: 0, tr: 0, br: 3, bl: 3 });
+
+  // Rolled-end cylinders (left and right caps).
+  g.fillStyle(0xc8a83a, 1);
+  g.fillEllipse(5, cy + 1, 10, SCROLL_H - 18);
+  g.fillEllipse(SCROLL_W - 5, cy + 1, 10, SCROLL_H - 18);
+
+  // Highlight on left cap.
+  g.fillStyle(0xf0d46a, 0.6);
+  g.fillEllipse(4, cy, 4, SCROLL_H - 22);
+
+  // Small quill-nib mark in the center.
+  g.lineStyle(1, 0x6b5530, 0.8);
+  g.beginPath();
+  g.moveTo(cx, cy - 3);
+  g.lineTo(cx, cy + 3);
+  g.strokePath();
+  g.beginPath();
+  g.moveTo(cx - 3, cy);
+  g.lineTo(cx + 3, cy);
+  g.strokePath();
+
+  // Golden glow ring — signals this is something worth reading.
+  g.lineStyle(1.5, 0xffd700, 0.65);
+  g.strokeEllipse(cx, cy + 1, SCROLL_W - 2, SCROLL_H - 10);
+
+  g.generateTexture(key, SCROLL_W, SCROLL_H);
+  g.destroy();
+  return { w: SCROLL_W, h: SCROLL_H };
+}
+
 // Generate everything; returns metadata the scene needs for sizing/bodies.
 export function generateTextures(scene) {
   const grassVariants = 4;
@@ -1191,6 +1248,9 @@ export function generateTextures(scene) {
   // Map fragment — collectible parchment scrap, scattered in distant corners.
   const mapFragment = makeMapFragmentTexture(scene, 'map-fragment');
 
+  // Explorer scroll — glowing parchment left on the ground by a player.
+  const scroll = makeScrollTexture(scene, 'scroll');
+
   return {
     tile: TILE,
     grassVariants,
@@ -1207,5 +1267,6 @@ export function generateTextures(scene) {
     runeStone,
     stoneArch,
     mapFragment,
+    scroll,
   };
 }
