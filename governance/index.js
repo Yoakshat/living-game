@@ -1,5 +1,5 @@
 const http = require('http');
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 const fs = require('fs');
 
 const SERVER_URL = process.env.SERVER_URL;
@@ -18,8 +18,8 @@ function log(msg) {
   console.log(`[${new Date().toISOString()}] ${msg}`);
 }
 
-function git(cmd) {
-  return execSync(`git ${cmd}`, { cwd: REPO_DIR, stdio: 'pipe' }).toString().trim();
+function git(...args) {
+  return execFileSync('git', args, { cwd: REPO_DIR, stdio: 'pipe' }).toString().trim();
 }
 
 function ensureRepo() {
@@ -29,9 +29,9 @@ function ensureRepo() {
     log('Cloning repo...');
     execSync(`git clone ${remoteUrl} ${REPO_DIR}`, { stdio: 'pipe' });
   }
-  git('config user.email "governance@living-game"');
-  git('config user.name "Living Game Governance"');
-  git(`remote set-url origin ${remoteUrl}`);
+  git('config', 'user.email', 'governance@living-game');
+  git('config', 'user.name', 'Living Game Governance');
+  git('remote', 'set-url', 'origin', remoteUrl);
   repoReady = true;
   log('Repo ready');
 }
@@ -134,9 +134,9 @@ async function govern() {
   mergeLock = true;
   try {
     ensureRepo();
-    git('fetch origin');
-    git('checkout main');
-    git('pull origin main');
+    git('fetch', 'origin');
+    git('checkout', 'main');
+    git('pull', 'origin', 'main');
 
     const mergedNums = new Set();
     const completedIdeas = new Set();
@@ -144,7 +144,7 @@ async function govern() {
     for (const pr of readyPRs) {
       const branch = pr.head.ref;
       try {
-        const result = git(`merge -X union --no-edit origin/${branch}`);
+        const result = git('merge', '-X', 'union', '--no-edit', `origin/${branch}`);
         log(`PR #${pr.number} (${branch}): ${result.split('\n')[0]}`);
         mergedNums.add(pr.number);
         const ideaId = extractIdeaId(pr.title);
@@ -152,12 +152,12 @@ async function govern() {
       } catch (err) {
         const msg = err.stderr ? err.stderr.toString().split('\n')[0] : err.message;
         log(`PR #${pr.number} merge error: ${msg}`);
-        try { git('merge --abort'); } catch {}
+        try { git('merge', '--abort'); } catch {}
       }
     }
 
     if (mergedNums.size > 0) {
-      git('push origin main');
+      git('push', 'origin', 'main');
       log(`Pushed ${mergedNums.size} merge(s) to main`);
     }
 
@@ -172,8 +172,8 @@ async function govern() {
     }
   } catch (err) {
     log(`Govern error: ${err.message}`);
-    try { git('merge --abort'); } catch {}
-    try { git('reset --hard origin/main'); } catch {}
+    try { git('merge', '--abort'); } catch {}
+    try { git('reset', '--hard', 'origin/main'); } catch {}
   } finally {
     mergeLock = false;
   }
