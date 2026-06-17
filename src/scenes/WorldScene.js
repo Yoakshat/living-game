@@ -41,6 +41,14 @@ export default class WorldScene extends Phaser.Scene {
     this._scrolls = [];
     // Whether the note-entry UI is open (prevents movement while typing).
     this._noteInputOpen = false;
+    // Footrace state
+    this._raceActive = false;
+    this._raceDestX = 0;
+    this._raceDestY = 0;
+    this._raceMarker = null;        // Graphics object for the glowing destination
+    this._raceCountdownText = null; // HUD text showing time remaining
+    this._raceTimer = null;         // Phaser TimerEvent for the 60s countdown
+    this._raceSecondsLeft = 0;
   }
 
   create() {
@@ -346,6 +354,30 @@ export default class WorldScene extends Phaser.Scene {
     });
     this.input.keyboard.addCapture(['W', 'A', 'S', 'D', 'F']);
 
+    // R key — start footrace when near campfire
+    this.input.keyboard.on('keydown-R', () => {
+      this._tryStartRace();
+    });
+
+    // --- Race countdown HUD -------------------------------------------------
+    this._raceCountdownText = this.add
+      .text(0, 0, '', {
+        fontFamily: '"Palatino Linotype", Palatino, serif',
+        fontSize: '20px',
+        color: '#ff9933',
+        stroke: '#241a08',
+        strokeThickness: 4,
+        align: 'center',
+      })
+      .setOrigin(0.5, 0)
+      .setScrollFactor(0)
+      .setDepth(10005)
+      .setAlpha(0);
+
+    // Race marker graphics (glowing destination indicator)
+    this._raceMarker = this.add.graphics();
+    this._raceMarker.setDepth(9800);
+
     // --- Wanderer beacons ---------------------------------------------------
     // Array of active beacons: { graphics, nameTag, x, y, plantedAt }
     this._beacons = [];
@@ -647,6 +679,23 @@ export default class WorldScene extends Phaser.Scene {
     // A player placed a scroll — spawn it locally.
     socket.on('scroll:placed', (data) => {
       this._enqueue(() => this._spawnScroll(data.x, data.y, data.message, data.expireAt));
+    });
+
+    // Another client broadcast that a race started.
+    socket.on('race:started', (data) => {
+      this._enqueue(() => {
+        if (!this._raceActive) {
+          this._beginRace(data.destX, data.destY);
+        }
+      });
+    });
+
+    // Another client broadcast that a race was won.
+    socket.on('race:won', (data) => {
+      this._enqueue(() => {
+        this._endRace();
+        this._showToast(`🏆 ${data.winner} wins the footrace!`, 4000);
+      });
     });
   }
 
@@ -1446,6 +1495,12 @@ export default class WorldScene extends Phaser.Scene {
     // Hidden ruins: reveal if any player is within 3 tiles (144px).
     this._checkRuinProximity();
 
+    // Footrace: update pulsing marker and check if local player reached destination.
+    if (this._raceActive) {
+      this._drawRaceMarker(this._raceDestX, this._raceDestY);
+      this._checkRaceWin();
+    }
+
     // Rune stone glow pulse — a slow sine-wave tint cycle on the stone sprite.
     // Alternates between pale cyan-white and the base sprite color.
     const pulse = 0.6 + 0.4 * Math.sin(time * 0.002);
@@ -1540,6 +1595,156 @@ export default class WorldScene extends Phaser.Scene {
         this._runeMsgBg.lineStyle(1, 0x44ffcc, 0.5);
         this._runeMsgBg.strokeRoundedRect(px - panelW / 2, py - panelH / 2, panelW, panelH, 6);
         this._runeMsgText.setPosition(px, py);
+      }
+    }
+  }
+
+  // ---- Footrace helpers ----------------------------------------------------
+
+  // Attempt to start a footrace. Only works if within 3 tiles of campfire and
+  // no race is currently active.
+  _tryStartRace() {
+    if (this._raceActive) {
+      this._showToast('A race is already in progress!', 1500);
+      return;
+    }
+
+    const campfireDist = Phaser.Math.Distance.Between(
+      this.player.x, this.player.y,
+      this._campfireX, this._campfireY
+    );
+    const THREE_TILES = this.meta.tile * 3;
+    if (campfireDist > THREE_TILES) {
+      this._showToast('Stand near the campfire to start a race!', 1800);
+      return;
+    }
+
+    // Pick a random far corner (~5%/95% of world bounds).
+    const corners = [
+      { x: this.worldW * 0.05, y: this.worldH * 0.05 },  // NW
+      { x: this.worldW * 0.95, y: this.worldH * 0.05 },  // NE
+      { x: this.worldW * 0.05, y: this.worldH * 0.95 },  // SW
+      { x: this.worldW * 0.95, y: this.worldH * 0.95 },  // SE
+    ];
+    const corner = corners[Math.floor(Math.random() * corners.length)];
+    const destX = Math.round(corner.x);
+    const destY = Math.round(corner.y);
+
+    // Start the race locally.
+    this._beginRace(destX, destY);
+
+    // Broadcast to other players via socket.
+    if (this._socket && this._socket.connected) {
+      this._socket.emit('race:start', { destX, destY });
+    }
+  }
+
+  // Begin the race visuals and timer. Called locally and when receiving race:started.
+  _beginRace(destX, destY) {
+    this._raceActive = true;
+    this._raceDestX = destX;
+    this._raceDestY = destY;
+    this._raceSecondsLeft = 60;
+
+    // Show HUD countdown.
+    const camW = this.cameras.main.width;
+    this._raceCountdownText.setText('🏁 Race! 60s');
+    this._raceCountdownText.setPosition(camW / 2, 12);
+    this._raceCountdownText.setAlpha(1);
+
+    // Draw the glowing destination marker.
+    this._drawRaceMarker(destX, destY);
+
+    // Show a starting toast.
+    this._showToast('Footrace started! Reach the glowing marker!', 3000);
+
+    // Start the 60-second countdown — tick every second.
+    if (this._raceTimer) {
+      this._raceTimer.remove();
+      this._raceTimer = null;
+    }
+    this._raceTimer = this.time.addEvent({
+      delay: 1000,
+      loop: true,
+      callback: () => {
+        this._raceSecondsLeft--;
+        if (this._raceSecondsLeft <= 0) {
+          // Time expired — no winner.
+          this._endRace();
+          this._showToast('The footrace expired — no winner!', 3000);
+        } else {
+          this._raceCountdownText.setText(`🏁 Race! ${this._raceSecondsLeft}s`);
+        }
+      },
+    });
+  }
+
+  // Draw (or redraw) the pulsing destination marker in the update loop.
+  _drawRaceMarker(x, y) {
+    const g = this._raceMarker;
+    g.clear();
+    if (!this._raceActive) return;
+
+    const t = this.time ? this.time.now : 0;
+    const pulse = 0.5 + 0.5 * Math.sin(t * 0.004);
+    const outerR = 22 + pulse * 8;
+    const innerR = 10 + pulse * 4;
+
+    // Outer glow ring — translucent gold.
+    g.fillStyle(0xffdd00, 0.25 + pulse * 0.15);
+    g.fillCircle(x, y, outerR * 1.8);
+
+    // Mid ring — brighter gold.
+    g.fillStyle(0xffd700, 0.55 + pulse * 0.2);
+    g.fillCircle(x, y, outerR);
+
+    // Inner bright core — near-white.
+    g.fillStyle(0xffffff, 0.85 + pulse * 0.15);
+    g.fillCircle(x, y, innerR);
+  }
+
+  // Stop the race: hide HUD, clear marker, cancel timer, reset state.
+  _endRace() {
+    this._raceActive = false;
+    this._raceMarker.clear();
+    this._raceCountdownText.setAlpha(0);
+    if (this._raceTimer) {
+      this._raceTimer.remove();
+      this._raceTimer = null;
+    }
+  }
+
+  // Check if the local player has reached the race destination (within 3 tiles).
+  _checkRaceWin() {
+    if (!this._raceActive) return;
+
+    const dist = Phaser.Math.Distance.Between(
+      this.player.x, this.player.y,
+      this._raceDestX, this._raceDestY
+    );
+    const THREE_TILES = this.meta.tile * 3;
+    if (dist < THREE_TILES) {
+      const winner = this._selfName || 'Explorer';
+
+      // End the race locally first.
+      this._endRace();
+      this._showToast(`🏆 ${winner} wins the footrace!`, 4000);
+
+      // Log to server.
+      const serverUrl =
+        (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_SERVER_URL)
+          ? import.meta.env.VITE_SERVER_URL
+          : 'https://living-game-server-production.up.railway.app';
+      const msg = `${winner} earns Fastest Explorer title!`;
+      fetch(`${serverUrl}/log-event`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ playerName: winner, message: msg }),
+      }).catch((err) => console.warn('[race] log-event failed:', err));
+
+      // Broadcast win to other players.
+      if (this._socket && this._socket.connected) {
+        this._socket.emit('race:win', { winner });
       }
     }
   }
