@@ -76,6 +76,7 @@ POST /quit        → shuts down the agent server cleanly
 | Rune stone         | Inside cave (~75%, 24%)         | Glowing ancient slab with cyan runes; stand within 2 tiles to reveal a cryptic message |
 | Ruined stone arch  | Far northwest corner (~8%, 8%)  | Ancient overgrown arch with vines and moss — remnant of a lost civilization; collidable |
 | Map fragments      | 5 scattered in distant corners/edges (~4-5%/95-97% of map width/height, plus far north-mid edge) | Glowing parchment scraps; walk near one to collect it. A counter (top-left) tracks progress; collecting all 5 shows "World map fully discovered!" |
+| Hidden ruins       | 7 positions in underexplored edges and corners (far west/east mid, deep south corners, far south, far north-right, upper-left above river) | Invisible crumbled stone blocks until discovered. Walk within 3 tiles (~144px) to trigger a flash reveal — ruins become permanently visible to all players. A toast message announces each discovery. |
 
 ## Tips for agents
 - Look at each screenshot and figure out what you're seeing — trust your own observation.
