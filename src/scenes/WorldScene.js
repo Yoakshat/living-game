@@ -63,6 +63,13 @@ export default class WorldScene extends Phaser.Scene {
     this._treasureChests = [];
     // Treasure score for this session (counts local claims).
     this._treasureScore = 0;
+
+    // Elevation zones: hill and valley regions that affect movement speed and view radius.
+    // Hills slow you 20% going uphill (entering), speed you 15% going downhill (leaving).
+    // Standing on high ground extends view radius by 1.5 tiles during night.
+    // Defined as { x, y, radius, type: 'hill'|'valley', label }
+    this._elevationZones = null; // populated in create() after worldW/worldH are known
+    this._currentElevation = 'flat'; // 'flat', 'hill', 'valley'
   }
 
   create() {
@@ -89,6 +96,63 @@ export default class WorldScene extends Phaser.Scene {
         const img = this.add.image(tx * T, ty * T, 'grass-' + v).setOrigin(0, 0);
         if ((tx + ty) % 2 === 0) img.setFlipX(true);
         if ((tx * ty) % 3 === 0) img.setFlipY(true);
+      }
+    }
+
+    // --- Elevation zones (hills and valleys) ---------------------------------
+    // 3-4 hill regions (lighter, brighter terrain) and 2 valley regions
+    // (darker, slightly bluish terrain). These are purely visual overlays
+    // that also affect player speed and night view radius.
+    this._elevationZones = [
+      // Hills — 4 regions scattered across the map
+      { x: this.worldW * 0.18, y: this.worldH * 0.18, radius: this.meta.tile * 5, type: 'hill', label: 'Northern Heights' },
+      { x: this.worldW * 0.72, y: this.worldH * 0.55, radius: this.meta.tile * 4.5, type: 'hill', label: 'Eastern Ridge' },
+      { x: this.worldW * 0.25, y: this.worldH * 0.78, radius: this.meta.tile * 5, type: 'hill', label: 'Southern Bluff' },
+      { x: this.worldW * 0.82, y: this.worldH * 0.22, radius: this.meta.tile * 4, type: 'hill', label: 'Watchtower Hill' },
+      // Valleys — 2 regions (low-lying, shadowed)
+      { x: this.worldW * 0.50, y: this.worldH * 0.65, radius: this.meta.tile * 5, type: 'valley', label: 'Misty Valley' },
+      { x: this.worldW * 0.14, y: this.worldH * 0.45, radius: this.meta.tile * 4, type: 'valley', label: 'Shadow Glen' },
+    ];
+
+    // Draw terrain shading for elevation zones (behind obstacles).
+    const elevG = this.add.graphics();
+    elevG.setDepth(1); // just above grass layer
+    for (const zone of this._elevationZones) {
+      if (zone.type === 'hill') {
+        // Hills: bright warm-green gradient — multiple concentric rings fading outward
+        const steps = 8;
+        for (let s = 0; s < steps; s++) {
+          const t = s / steps;
+          const r = zone.radius * (1 - t);
+          // Lighten: blend toward bright yellow-green
+          const alpha = 0.18 - t * 0.14;
+          elevG.fillStyle(0x88cc44, alpha);
+          elevG.fillCircle(zone.x, zone.y, r);
+        }
+        // Bright highlight at the peak
+        elevG.fillStyle(0xccee88, 0.22);
+        elevG.fillCircle(zone.x, zone.y, zone.radius * 0.3);
+        // Contour ring (darker edge)
+        elevG.lineStyle(2, 0x5a9a2a, 0.35);
+        elevG.strokeCircle(zone.x, zone.y, zone.radius);
+        elevG.lineStyle(1.5, 0x5a9a2a, 0.2);
+        elevG.strokeCircle(zone.x, zone.y, zone.radius * 0.6);
+      } else {
+        // Valleys: darker, slightly blue-green tint — shadow pools
+        const steps = 8;
+        for (let s = 0; s < steps; s++) {
+          const t = s / steps;
+          const r = zone.radius * (1 - t);
+          const alpha = 0.20 - t * 0.15;
+          elevG.fillStyle(0x224433, alpha);
+          elevG.fillCircle(zone.x, zone.y, r);
+        }
+        // Misty haze at the center
+        elevG.fillStyle(0x336655, 0.12);
+        elevG.fillCircle(zone.x, zone.y, zone.radius * 0.4);
+        // Contour ring
+        elevG.lineStyle(2, 0x1a3322, 0.3);
+        elevG.strokeCircle(zone.x, zone.y, zone.radius);
       }
     }
 
@@ -1538,8 +1602,43 @@ export default class WorldScene extends Phaser.Scene {
 
     if (vx !== 0 || vy !== 0) {
       const len = Math.hypot(vx, vy);
+
+      // Determine current elevation zone under the player.
+      let newElevation = 'flat';
+      for (const zone of this._elevationZones) {
+        const d = Phaser.Math.Distance.Between(this.player.x, this.player.y, zone.x, zone.y);
+        if (d < zone.radius) {
+          newElevation = zone.type;
+          break;
+        }
+      }
+
+      // Detect transition for speed modifier:
+      // Moving INTO a hill zone → uphill (slow 20%)
+      // Moving OUT OF a hill zone → downhill (speed 15%)
+      let speedMult = 1.0;
+      if (this._currentElevation !== newElevation) {
+        if (newElevation === 'hill') {
+          // Entering a hill — moving uphill → 20% slower
+          speedMult = 0.80;
+        } else if (this._currentElevation === 'hill' && newElevation !== 'hill') {
+          // Leaving a hill — moving downhill → 15% faster
+          speedMult = 1.15;
+        }
+        this._currentElevation = newElevation;
+      } else {
+        // Staying in same zone — apply sustained modifier
+        if (newElevation === 'hill') {
+          speedMult = 0.80; // on a hill, consistently slower (uphill effort)
+        } else if (newElevation === 'valley') {
+          speedMult = 1.0; // valleys: neutral
+        }
+      }
+
       // Movement is 10% slower during rain.
-      const speed = this._isRaining ? PLAYER_SPEED * 0.9 : PLAYER_SPEED;
+      const speed = this._isRaining
+        ? PLAYER_SPEED * 0.9 * speedMult
+        : PLAYER_SPEED * speedMult;
       body.setVelocity((vx / len) * speed, (vy / len) * speed);
 
       let dir = this.facing;
@@ -1560,6 +1659,16 @@ export default class WorldScene extends Phaser.Scene {
       }
     } else {
       body.setVelocity(0, 0);
+      // Update elevation even when still so view radius & other effects stay current.
+      let stillElevation = 'flat';
+      for (const zone of this._elevationZones) {
+        const d = Phaser.Math.Distance.Between(this.player.x, this.player.y, zone.x, zone.y);
+        if (d < zone.radius) {
+          stillElevation = zone.type;
+          break;
+        }
+      }
+      this._currentElevation = stillElevation;
     }
 
     this.player.setDepth(this.player.y);
@@ -1663,7 +1772,10 @@ export default class WorldScene extends Phaser.Scene {
       this._nightOverlay.fillRect(camX, camY, wW, wH);
 
       // 2. Punch visibility holes — local player sees normally within ~4 tiles.
-      drawLight(this.player.x, this.player.y, VIS_R, 0x000d1a);
+      // Standing on high ground extends view radius by ~1.5 tiles (72px).
+      const onHighGround = this._currentElevation === 'hill';
+      const playerVis = onHighGround ? VIS_R + 72 : VIS_R;
+      drawLight(this.player.x, this.player.y, playerVis, 0x000d1a);
 
       // 3. Remote players also get a personal light radius.
       for (const [, rp] of this.remotePlayers) {

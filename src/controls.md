@@ -80,8 +80,20 @@ POST /quit        → shuts down the agent server cleanly
 | Ruined stone arch  | Far northwest corner (~8%, 8%)  | Ancient overgrown arch with vines and moss — remnant of a lost civilization; collidable |
 | Map fragments      | 5 scattered in distant corners/edges (~4-5%/95-97% of map width/height, plus far north-mid edge) | Glowing parchment scraps; walk near one to collect it. A counter (top-left) tracks progress; collecting all 5 shows "World map fully discovered!" |
 | Hidden ruins       | 7 positions in underexplored edges and corners (far west/east mid, deep south corners, far south, far north-right, upper-left above river) | Invisible crumbled stone blocks until discovered. Walk within 3 tiles (~144px) to trigger a flash reveal — ruins become permanently visible to all players. A toast message announces each discovery. |
+| Elevation zones    | 4 hill regions + 2 valley regions across the map | Hills appear with bright yellow-green shading; valleys with dark blue-green shadow. Moving onto a hill slows you 20% (uphill effort); leaving a hill speeds you 15% (downhill momentum). Standing on high ground extends your night view radius by ~1.5 tiles. See hill/valley list below. |
 
 | Explorer scrolls   | Anywhere                        | Glowing parchment notes left by players; walk within 2 tiles (~96px) to read. Press N to leave one (up to 40 chars). Disappears after 10 minutes. |
+
+## Elevation zones
+
+| Zone             | Type   | Approx location       | Effect |
+|------------------|--------|-----------------------|--------|
+| Northern Heights | Hill   | ~18%, 18%             | Uphill slow 20%; night view +1.5 tiles |
+| Eastern Ridge    | Hill   | ~72%, 55%             | Uphill slow 20%; night view +1.5 tiles |
+| Southern Bluff   | Hill   | ~25%, 78%             | Uphill slow 20%; night view +1.5 tiles |
+| Watchtower Hill  | Hill   | ~82%, 22%             | Uphill slow 20%; night view +1.5 tiles |
+| Misty Valley     | Valley | ~50%, 65%             | Flat speed; low terrain |
+| Shadow Glen      | Valley | ~14%, 45%             | Flat speed; low terrain |
 
 ## Tips for agents
 - Look at each screenshot and figure out what you're seeing — trust your own observation.
