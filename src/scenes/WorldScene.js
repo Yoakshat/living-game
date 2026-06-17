@@ -41,6 +41,16 @@ export default class WorldScene extends Phaser.Scene {
     this._scrolls = [];
     // Whether the note-entry UI is open (prevents movement while typing).
     this._noteInputOpen = false;
+    // Territory claiming
+    // territories: array of { graphics, nameTag, ownerName, ownerColor, x, y, claimedAt, lastVisit, decayTimer }
+    this._territories = [];
+    this._TERRITORY_RADIUS = 96;         // 3-tile radius in world pixels
+    this._TERRITORY_DECAY_MS = 10 * 60 * 1000; // 10 minutes
+    this._STILLNESS_THRESHOLD = 5000;    // 5 seconds of no movement
+    this._lastMovedTime = 0;             // time of last position change
+    this._lastPlayerX = null;
+    this._lastPlayerY = null;
+    this._territoryCountText = null;
   }
 
   create() {
@@ -275,6 +285,19 @@ export default class WorldScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(10003);
 
+    // Territory counter — camera-fixed HUD text, top-left (below fragment counter).
+    this._territoryCountText = this.add
+      .text(0, 20, 'Territories: 0', {
+        fontFamily: '"Palatino Linotype", Palatino, serif',
+        fontSize: '14px',
+        color: '#aaddff',
+        stroke: '#0a1a2a',
+        strokeThickness: 4,
+      })
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(10003);
+
     // --- Hidden ruins (placed in underexplored areas at the edges/corners) ----
     // Ruins start invisible (alpha=0). When any player walks within 3 tiles
     // (~144px), the ruin flashes into view permanently for all players.
@@ -358,6 +381,11 @@ export default class WorldScene extends Phaser.Scene {
     // N key — open note-entry overlay to leave an explorer scroll.
     this.input.keyboard.on('keydown-N', () => {
       if (!this._noteInputOpen) this._openNoteInput();
+    });
+
+    // T key — claim territory (only if player has been still for 5 seconds).
+    this.input.keyboard.on('keydown-T', () => {
+      this._tryClaimTerritory();
     });
 
     // --- Introspection hook -------------------------------------------------
@@ -1507,6 +1535,26 @@ export default class WorldScene extends Phaser.Scene {
       b.nameTag.setAlpha(fadeAlpha);
     }
 
+    // ---- Territory system ---------------------------------------------------
+    // Track player stillness for T-key claiming.
+    if (this._lastPlayerX === null) {
+      this._lastPlayerX = this.player.x;
+      this._lastPlayerY = this.player.y;
+      this._lastMovedTime = time;
+    }
+    const movedDist = Phaser.Math.Distance.Between(
+      this.player.x, this.player.y,
+      this._lastPlayerX, this._lastPlayerY
+    );
+    if (movedDist > 4) {
+      this._lastMovedTime = time;
+      this._lastPlayerX = this.player.x;
+      this._lastPlayerY = this.player.y;
+    }
+
+    // Update territory visuals (pulse glow, check revisit reset, remote player tints).
+    this._updateTerritories(time);
+
     // Rune stone proximity: show/hide cryptic message within ~96px (2 tiles).
     const RUNE_TRIGGER_DIST = 96;
     const runeDist = Phaser.Math.Distance.Between(
@@ -1545,6 +1593,177 @@ export default class WorldScene extends Phaser.Scene {
   }
 
   // ---- Wanderer beacon helpers ---------------------------------------------
+
+  // ---- Territory claiming ---------------------------------------------------
+
+  // Try to claim a territory zone at the player's current position.
+  // Succeeds only if the player has been still for 5 seconds.
+  _tryClaimTerritory() {
+    const now = this.time.now;
+    const stillMs = now - this._lastMovedTime;
+
+    if (stillMs < this._STILLNESS_THRESHOLD) {
+      const remaining = Math.ceil((this._STILLNESS_THRESHOLD - stillMs) / 1000);
+      this._showToast(`Stand still for ${remaining}s more to claim territory.`, 1500);
+      return;
+    }
+
+    const px = this.player.x;
+    const py = this.player.y;
+
+    // Check if there's already an own territory overlapping this position.
+    for (const t of this._territories) {
+      if (t.ownerName === (this._selfName || 'Explorer')) {
+        const d = Phaser.Math.Distance.Between(px, py, t.x, t.y);
+        if (d < this._TERRITORY_RADIUS * 1.5) {
+          // Refresh the existing territory's decay timer instead of placing a new one.
+          t.lastVisit = now;
+          if (t.decayTimer) t.decayTimer.remove();
+          t.decayTimer = this.time.delayedCall(this._TERRITORY_DECAY_MS, () => {
+            this._removeTerritory(t);
+          });
+          this._showToast('Territory refreshed! (10 min decay reset)', 1800);
+          return;
+        }
+      }
+    }
+
+    this._placeTerritory(px, py, this._selfName || 'Explorer', this._selfColor || '#ffffff', now);
+    this._showToast('Territory claimed! (glows for 10 minutes)', 2200);
+    console.log('[territory] claimed at', Math.round(px), Math.round(py));
+  }
+
+  // Place a territory zone at world position (wx, wy) for ownerName.
+  _placeTerritory(wx, wy, ownerName, ownerColor, claimedAt) {
+    const colorInt = Phaser.Display.Color.HexStringToColor(ownerColor).color;
+
+    // Background glow zone (filled circle with alpha).
+    const g = this.add.graphics();
+    g.setDepth(wy - 1);  // just above ground, below player
+
+    // Floating name tag above the zone center.
+    const tag = this.add
+      .text(wx, wy - this._TERRITORY_RADIUS - 10, ownerName, {
+        fontFamily: 'Arial, sans-serif',
+        fontSize: '11px',
+        color: ownerColor,
+        stroke: '#000000',
+        strokeThickness: 3,
+        resolution: 2,
+      })
+      .setOrigin(0.5, 1)
+      .setDepth(wy + 50);
+
+    const entry = {
+      graphics: g,
+      nameTag: tag,
+      ownerName,
+      ownerColor,
+      colorInt,
+      x: wx,
+      y: wy,
+      claimedAt,
+      lastVisit: claimedAt,
+      decayTimer: null,
+    };
+
+    // Schedule automatic removal after decay time.
+    entry.decayTimer = this.time.delayedCall(this._TERRITORY_DECAY_MS, () => {
+      this._removeTerritory(entry);
+    });
+
+    this._territories.push(entry);
+    this._updateTerritoryHUD();
+  }
+
+  _removeTerritory(entry) {
+    if (entry.graphics) entry.graphics.destroy();
+    if (entry.nameTag) entry.nameTag.destroy();
+    this._territories = this._territories.filter((t) => t !== entry);
+    this._updateTerritoryHUD();
+  }
+
+  _updateTerritoryHUD() {
+    if (!this._territoryCountText) return;
+    const myName = this._selfName || 'Explorer';
+    const myCount = this._territories.filter((t) => t.ownerName === myName).length;
+    this._territoryCountText.setText(`Territories: ${myCount}`);
+  }
+
+  // Called each update frame — pulse territory glows and handle remote player tints.
+  _updateTerritories(time) {
+    const pulse = 0.2 + 0.15 * Math.sin(time * 0.0018);
+
+    for (const t of this._territories) {
+      const g = t.graphics;
+      g.clear();
+
+      // Outer soft ring.
+      g.fillStyle(t.colorInt, pulse * 0.5);
+      g.fillCircle(t.x, t.y, this._TERRITORY_RADIUS);
+
+      // Inner brighter core.
+      g.fillStyle(t.colorInt, pulse * 0.8);
+      g.fillCircle(t.x, t.y, this._TERRITORY_RADIUS * 0.5);
+
+      // Border ring.
+      g.lineStyle(2, t.colorInt, 0.6);
+      g.strokeCircle(t.x, t.y, this._TERRITORY_RADIUS);
+    }
+
+    // Check if local player is inside someone else's territory — apply color tint.
+    let insideForeignTerr = false;
+    for (const t of this._territories) {
+      if (t.ownerName === (this._selfName || 'Explorer')) continue;
+      const d = Phaser.Math.Distance.Between(this.player.x, this.player.y, t.x, t.y);
+      if (d < this._TERRITORY_RADIUS) {
+        insideForeignTerr = true;
+        // Blend the territory owner color into the player's tint.
+        this.player.setTint(t.colorInt);
+        break;
+      }
+    }
+    if (!insideForeignTerr && this._selfColor) {
+      // Restore own color.
+      this.player.setTint(Phaser.Display.Color.HexStringToColor(this._selfColor).color);
+    }
+
+    // Revisit detection: if local player enters their own territory, reset decay.
+    const myName = this._selfName || 'Explorer';
+    for (const t of this._territories) {
+      if (t.ownerName !== myName) continue;
+      const d = Phaser.Math.Distance.Between(this.player.x, this.player.y, t.x, t.y);
+      if (d < this._TERRITORY_RADIUS) {
+        const now = this.time.now;
+        // Only reset if some time has passed since last reset (avoid hammering every frame).
+        if (now - t.lastVisit > 30000) {
+          t.lastVisit = now;
+          if (t.decayTimer) t.decayTimer.remove();
+          t.decayTimer = this.time.delayedCall(this._TERRITORY_DECAY_MS, () => {
+            this._removeTerritory(t);
+          });
+          console.log('[territory] decay reset on revisit');
+        }
+        break;
+      }
+    }
+
+    // Tint remote players that are inside any territory zone.
+    for (const [, rp] of this.remotePlayers) {
+      let rpInsideTerr = false;
+      for (const t of this._territories) {
+        const d = Phaser.Math.Distance.Between(rp.sprite.x, rp.sprite.y, t.x, t.y);
+        if (d < this._TERRITORY_RADIUS) {
+          rpInsideTerr = true;
+          rp.sprite.setTint(t.colorInt);
+          break;
+        }
+      }
+      if (!rpInsideTerr && rp.color) {
+        rp.sprite.setTint(Phaser.Display.Color.HexStringToColor(rp.color).color);
+      }
+    }
+  }
 
   // Plant a glowing trail marker at world position (wx, wy) tagged with playerName.
   // The beacon will pulse and fade over _BEACON_LIFETIME_MS milliseconds.

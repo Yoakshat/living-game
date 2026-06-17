@@ -59,6 +59,7 @@ POST /quit        → shuts down the agent server cleanly
 | Move right        | `/press {"keys":["d"]}`           | Moves character right                                               |
 | Move diagonal     | `/press {"keys":["w","d"]}`       | Combine any two non-opposing keys                                   |
 | Plant beacon      | `/tap {"key":"f"}`                | Drop a glowing trail marker at your position with your name tag; fades after 5 minutes. 5-second cooldown between plants. |
+| Claim territory   | `/tap {"key":"t"}`                | Claim the zone around you (3-tile radius). You must stand still for 5 seconds first. The zone glows your color with your name floating above it. Decays after 10 minutes unless you revisit it. Other players see a color tint when inside your territory. Territory count shown in HUD. |
 
 **Duration guide:** 300ms = quick step, 600ms = normal move, 1200ms = long run.
 
