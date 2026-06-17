@@ -1394,6 +1394,147 @@ function makeMeteorCraterTexture(scene, key) {
   return { w: CRATER_W, h: CRATER_H };
 }
 
+// --- Wildlife textures -------------------------------------------------------
+// Small animal sprites drawn with simple shapes. Three types: deer, rabbit, bird.
+// A special golden variant of the deer has a bright gold tint.
+
+const DEER_W = 28;
+const DEER_H = 28;
+
+function makeDeerTexture(scene, key) {
+  const g = scene.make.graphics({ x: 0, y: 0, add: false });
+  const cx = DEER_W / 2;
+
+  // Ground shadow.
+  g.fillStyle(0x000000, 0.12);
+  g.fillEllipse(cx, DEER_H - 4, 18, 5);
+
+  // Body — tan oval.
+  g.fillStyle(0xc8956a, 1);
+  g.fillEllipse(cx, 18, 16, 11);
+
+  // Neck and head.
+  g.fillStyle(0xc8956a, 1);
+  g.fillEllipse(cx - 1, 11, 7, 9);
+  g.fillEllipse(cx, 7, 8, 7); // head
+
+  // White belly/chin patch.
+  g.fillStyle(0xf0dfc0, 0.85);
+  g.fillEllipse(cx, 20, 8, 6);
+  g.fillEllipse(cx + 1, 8, 4, 4);
+
+  // Legs — thin brown lines (4 legs).
+  g.lineStyle(2, 0x8b5e3c, 1);
+  g.beginPath(); g.moveTo(cx - 5, 22); g.lineTo(cx - 5, DEER_H - 2); g.strokePath();
+  g.beginPath(); g.moveTo(cx - 2, 22); g.lineTo(cx - 2, DEER_H - 2); g.strokePath();
+  g.beginPath(); g.moveTo(cx + 2, 22); g.lineTo(cx + 2, DEER_H - 2); g.strokePath();
+  g.beginPath(); g.moveTo(cx + 5, 22); g.lineTo(cx + 5, DEER_H - 2); g.strokePath();
+
+  // Antlers (two small Y-shapes).
+  g.lineStyle(1.5, 0x6b4020, 1);
+  g.beginPath(); g.moveTo(cx - 2, 5); g.lineTo(cx - 2, 1); g.strokePath();
+  g.beginPath(); g.moveTo(cx - 2, 3); g.lineTo(cx - 5, 1); g.strokePath();
+  g.beginPath(); g.moveTo(cx - 2, 3); g.lineTo(cx, 1); g.strokePath();
+  g.beginPath(); g.moveTo(cx + 3, 5); g.lineTo(cx + 3, 1); g.strokePath();
+  g.beginPath(); g.moveTo(cx + 3, 3); g.lineTo(cx + 1, 1); g.strokePath();
+  g.beginPath(); g.moveTo(cx + 3, 3); g.lineTo(cx + 5, 1); g.strokePath();
+
+  // Eye dot.
+  g.fillStyle(0x1a0a00, 1);
+  g.fillCircle(cx + 2, 7, 1.2);
+
+  g.generateTexture(key, DEER_W, DEER_H);
+  g.destroy();
+  return { w: DEER_W, h: DEER_H };
+}
+
+const RABBIT_W = 18;
+const RABBIT_H = 20;
+
+function makeRabbitTexture(scene, key) {
+  const g = scene.make.graphics({ x: 0, y: 0, add: false });
+  const cx = RABBIT_W / 2;
+
+  // Shadow.
+  g.fillStyle(0x000000, 0.1);
+  g.fillEllipse(cx, RABBIT_H - 2, 12, 4);
+
+  // Body — round gray oval.
+  g.fillStyle(0xb8b0a8, 1);
+  g.fillEllipse(cx, 14, 12, 10);
+
+  // Head.
+  g.fillStyle(0xb8b0a8, 1);
+  g.fillEllipse(cx, 7, 9, 8);
+
+  // White belly.
+  g.fillStyle(0xddd8d2, 0.8);
+  g.fillEllipse(cx, 15, 6, 6);
+
+  // Ears — two tall thin ovals.
+  g.fillStyle(0xb8b0a8, 1);
+  g.fillEllipse(cx - 3, 3, 4, 7);
+  g.fillEllipse(cx + 3, 3, 4, 7);
+  // Inner ear pink.
+  g.fillStyle(0xe8a0a0, 0.7);
+  g.fillEllipse(cx - 3, 3, 2, 4);
+  g.fillEllipse(cx + 3, 3, 2, 4);
+
+  // Eye.
+  g.fillStyle(0x1a0a0a, 1);
+  g.fillCircle(cx + 2, 7, 1);
+
+  // Tail — tiny white dot.
+  g.fillStyle(0xffffff, 0.9);
+  g.fillCircle(cx - 5, 13, 2);
+
+  g.generateTexture(key, RABBIT_W, RABBIT_H);
+  g.destroy();
+  return { w: RABBIT_W, h: RABBIT_H };
+}
+
+const BIRD_W = 16;
+const BIRD_H = 14;
+
+function makeBirdTexture(scene, key) {
+  const g = scene.make.graphics({ x: 0, y: 0, add: false });
+  const cx = BIRD_W / 2;
+  const cy = BIRD_H / 2 + 1;
+
+  // Body — small warm brown oval.
+  g.fillStyle(0x8c6a3a, 1);
+  g.fillEllipse(cx, cy, 10, 7);
+
+  // Wing — slightly lighter.
+  g.fillStyle(0xa07840, 1);
+  g.fillEllipse(cx - 1, cy, 8, 5);
+
+  // Head.
+  g.fillStyle(0x8c6a3a, 1);
+  g.fillEllipse(cx + 4, cy - 2, 6, 5);
+
+  // Belly.
+  g.fillStyle(0xd4a870, 0.7);
+  g.fillEllipse(cx + 1, cy + 1, 5, 4);
+
+  // Beak — tiny yellow triangle.
+  g.fillStyle(0xffcc00, 1);
+  g.fillTriangle(cx + 7, cy - 2, cx + 10, cy - 1, cx + 7, cy);
+
+  // Eye.
+  g.fillStyle(0x0a0a0a, 1);
+  g.fillCircle(cx + 5, cy - 3, 1);
+
+  // Legs — thin lines.
+  g.lineStyle(1, 0xffcc00, 1);
+  g.beginPath(); g.moveTo(cx + 1, cy + 3); g.lineTo(cx, BIRD_H); g.strokePath();
+  g.beginPath(); g.moveTo(cx + 3, cy + 3); g.lineTo(cx + 4, BIRD_H); g.strokePath();
+
+  g.generateTexture(key, BIRD_W, BIRD_H);
+  g.destroy();
+  return { w: BIRD_W, h: BIRD_H };
+}
+
 // Generate everything; returns metadata the scene needs for sizing/bodies.
 export function generateTextures(scene) {
   const grassVariants = 4;
@@ -1443,6 +1584,11 @@ export function generateTextures(scene) {
   // Meteor crater — scorched impact site left after a meteor shower event.
   const meteorCrater = makeMeteorCraterTexture(scene, 'meteor-crater');
 
+  // Wildlife animals — deer, rabbit, bird.
+  const deer = makeDeerTexture(scene, 'deer');
+  const rabbit = makeRabbitTexture(scene, 'rabbit');
+  const bird = makeBirdTexture(scene, 'bird');
+
   return {
     tile: TILE,
     grassVariants,
@@ -1462,5 +1608,8 @@ export function generateTextures(scene) {
     ruin,
     treasureChest,
     meteorCrater,
+    deer,
+    rabbit,
+    bird,
   };
 }

@@ -63,6 +63,20 @@ export default class WorldScene extends Phaser.Scene {
     this._treasureChests = [];
     // Treasure score for this session (counts local claims).
     this._treasureScore = 0;
+    // Wildlife: array of { sprite, glowGraphics, type, x, y, vx, vy, isGolden, claimed }
+    this._wildlife = [];
+    // Interval for wildlife roam ticks (ms).
+    this._WILDLIFE_ROAM_INTERVAL = 2500;
+    // How far a roam step moves an animal (px).
+    this._WILDLIFE_STEP = 48;
+    // Player flee radius: 4 tiles in px.
+    this._WILDLIFE_FLEE_DIST = 48 * 4;
+    // Golden deer claim radius: 2 tiles in px.
+    this._WILDLIFE_GOLDEN_DIST = 48 * 2;
+    // Timer for roam ticks.
+    this._wildlifeRoamTimer = null;
+    // Whether golden deer is currently active (only one at a time).
+    this._goldenDeerActive = false;
   }
 
   create() {
@@ -524,6 +538,16 @@ export default class WorldScene extends Phaser.Scene {
       callbackScope: this,
     });
 
+    // --- Wildlife system ------------------------------------------------------
+    // Spawn initial animals after a short delay, then roam every 2.5 seconds.
+    this.time.delayedCall(1500, () => this._spawnInitialWildlife());
+    this._wildlifeRoamTimer = this.time.addEvent({
+      delay: this._WILDLIFE_ROAM_INTERVAL,
+      loop: true,
+      callback: this._roamWildlife,
+      callbackScope: this,
+    });
+
     // Mark scene ready — flush any queued events.
     this._ready = true;
     for (const fn of this._eventQueue) fn();
@@ -931,12 +955,31 @@ export default class WorldScene extends Phaser.Scene {
       this._enqueue(() => {
         this._endRace();
         this._showToast(`🏆 ${data.winner} wins the footrace!`, 4000);
+      });
+    });
+
     // A player claimed a treasure chest — show crown toast announcement.
     socket.on('chest:claimed', (data) => {
       this._enqueue(() => {
         const msg = `👑 ${data.playerName} found a treasure chest! (+1 treasure)`;
         this._showToast(msg, 4000);
         console.log('[chest] claimed by', data.playerName);
+      });
+    });
+
+    // Another player claimed the golden deer — show announcement toast.
+    socket.on('golden:deer:claimed', (data) => {
+      this._enqueue(() => {
+        const msg = `👑 ${data.playerName} approached the golden deer and earns a crown!`;
+        this._showToast(msg, 5000);
+        console.log('[wildlife] golden deer claimed by', data.playerName);
+      });
+    });
+
+    // Server broadcast: golden deer spawned — show announcement to all.
+    socket.on('wildlife:golden_deer_spawned', () => {
+      this._enqueue(() => {
+        this._showToast('✨ A glowing golden deer has appeared! First to approach wins a crown!', 5000);
       });
     });
   }
@@ -1850,6 +1893,9 @@ export default class WorldScene extends Phaser.Scene {
       }
     }
 
+    // ---- Wildlife: animate golden deer glow and check claims ------------------
+    this._checkWildlife(time);
+
     // ---- Weather: update rain particles each frame ---------------------------
     this._updateRain(delta);
   }
@@ -2330,6 +2376,261 @@ export default class WorldScene extends Phaser.Scene {
       }
       if (!rpInsideTerr && rp.color) {
         rp.sprite.setTint(Phaser.Display.Color.HexStringToColor(rp.color).color);
+      }
+    }
+  }
+
+  // ---- Wildlife system -------------------------------------------------------
+
+  // Spawn 12 animals distributed near trees and meadows at game start.
+  _spawnInitialWildlife() {
+    const T = this.meta.tile;
+    const types = ['deer', 'deer', 'rabbit', 'rabbit', 'rabbit', 'bird', 'bird'];
+    const count = 12;
+
+    for (let i = 0; i < count; i++) {
+      // Random positions biased toward the interior of the map (5%–95%).
+      const x = T * 2 + Math.random() * (this.worldW - T * 4);
+      const y = T * 2 + Math.random() * (this.worldH - T * 4);
+      // Avoid river rows 6-8 (y ~288-432px).
+      if (y > T * 5.5 && y < T * 9) continue;
+      const type = types[i % types.length];
+      this._spawnAnimal(x, y, type, false);
+    }
+  }
+
+  // Create a single animal sprite at world position (wx, wy).
+  _spawnAnimal(wx, wy, type, isGolden) {
+    const sprite = this.add
+      .image(wx, wy, type)
+      .setOrigin(0.5, 0.5)
+      .setDepth(wy + 10);
+
+    // Golden deer gets a glowing golden tint and glow graphics.
+    let glowGraphics = null;
+    if (isGolden) {
+      sprite.setTint(0xffd700);
+      glowGraphics = this.add.graphics();
+      glowGraphics.setDepth(wy + 9);
+    }
+
+    const animal = {
+      sprite,
+      glowGraphics,
+      type,
+      x: wx,
+      y: wy,
+      isGolden,
+      claimed: false,
+    };
+
+    this._wildlife.push(animal);
+
+    if (isGolden) {
+      this._goldenDeerActive = true;
+      // Golden deer vanishes after 60 seconds if unclaimed.
+      this.time.delayedCall(60000, () => {
+        if (!animal.claimed) {
+          this._removeAnimal(animal);
+          this._goldenDeerActive = false;
+          console.log('[wildlife] golden deer vanished unclaimed');
+        }
+      });
+    }
+
+    return animal;
+  }
+
+  // Remove an animal from the world.
+  _removeAnimal(animal) {
+    if (animal.sprite) animal.sprite.destroy();
+    if (animal.glowGraphics) animal.glowGraphics.destroy();
+    this._wildlife = this._wildlife.filter((a) => a !== animal);
+  }
+
+  // Called every WILDLIFE_ROAM_INTERVAL ms — move animals and handle golden deer spawn.
+  _roamWildlife() {
+    const T = this.meta.tile;
+    const serverUrl =
+      (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_SERVER_URL)
+        ? import.meta.env.VITE_SERVER_URL
+        : 'https://living-game-server-production.up.railway.app';
+
+    // 1-in-5 chance to spawn a golden deer if none is active.
+    if (!this._goldenDeerActive && Math.random() < 0.2) {
+      // Spawn near a meadow — pick a random interior position.
+      const gx = T * 3 + Math.random() * (this.worldW - T * 6);
+      const gy = T * 10 + Math.random() * (this.worldH - T * 13); // below river
+      this._spawnAnimal(gx, gy, 'deer', true);
+
+      // Announce to all players via socket and toast.
+      const msg = '✨ A glowing golden deer has appeared! First to approach wins a crown!';
+      this._showToast(msg, 5000);
+      if (this._socket && this._socket.connected) {
+        this._socket.emit('wildlife:golden_deer_spawned', {});
+      }
+      // Also log to server for broadcast.
+      fetch(`${serverUrl}/log-event`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ playerName: 'World', message: msg }),
+      }).catch(() => {});
+
+      console.log('[wildlife] golden deer spawned at', Math.round(gx), Math.round(gy));
+    }
+
+    // Roam each animal.
+    for (const animal of this._wildlife) {
+      if (animal.claimed) continue;
+
+      // Check if any player is within 4 tiles — if so, flee.
+      let fleeX = 0;
+      let fleeY = 0;
+      let fleeing = false;
+
+      // Check local player.
+      const distLocal = Phaser.Math.Distance.Between(
+        this.player.x, this.player.y, animal.x, animal.y
+      );
+      if (distLocal < this._WILDLIFE_FLEE_DIST) {
+        fleeX += animal.x - this.player.x;
+        fleeY += animal.y - this.player.y;
+        fleeing = true;
+      }
+
+      // Check remote players.
+      for (const [, rp] of this.remotePlayers) {
+        const d = Phaser.Math.Distance.Between(rp.sprite.x, rp.sprite.y, animal.x, animal.y);
+        if (d < this._WILDLIFE_FLEE_DIST) {
+          fleeX += animal.x - rp.sprite.x;
+          fleeY += animal.y - rp.sprite.y;
+          fleeing = true;
+        }
+      }
+
+      let nx, ny;
+      if (fleeing) {
+        // Flee: normalize and move away by WILDLIFE_STEP * 1.5.
+        const len = Math.hypot(fleeX, fleeY) || 1;
+        const step = this._WILDLIFE_STEP * 1.5;
+        nx = animal.x + (fleeX / len) * step;
+        ny = animal.y + (fleeY / len) * step;
+      } else {
+        // Random roam: pick a direction.
+        const angle = Math.random() * Math.PI * 2;
+        nx = animal.x + Math.cos(angle) * this._WILDLIFE_STEP;
+        ny = animal.y + Math.sin(angle) * this._WILDLIFE_STEP;
+      }
+
+      // Clamp to world bounds (stay away from edges).
+      nx = Phaser.Math.Clamp(nx, T * 1.5, this.worldW - T * 1.5);
+      ny = Phaser.Math.Clamp(ny, T * 1.5, this.worldH - T * 1.5);
+
+      // Avoid river tiles (rows 6-8, y 288–432) unless fleeing directly through.
+      if (!fleeing && ny > T * 5.5 && ny < T * 9.5) {
+        ny = ny < T * 7 ? T * 5 : T * 10;
+      }
+
+      // Tween to new position for a smooth scatter animation.
+      this.tweens.add({
+        targets: animal.sprite,
+        x: nx,
+        y: ny,
+        duration: fleeing ? 300 : 600,
+        ease: fleeing ? 'Quad.easeOut' : 'Sine.easeInOut',
+        onComplete: () => {
+          animal.x = nx;
+          animal.y = ny;
+          animal.sprite.setDepth(ny + 10);
+          if (animal.glowGraphics) animal.glowGraphics.setDepth(ny + 9);
+        },
+      });
+
+      animal.x = nx;
+      animal.y = ny;
+    }
+  }
+
+  // Called each update frame — check golden deer proximity and animate glow.
+  _checkWildlife(time) {
+    const serverUrl =
+      (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_SERVER_URL)
+        ? import.meta.env.VITE_SERVER_URL
+        : 'https://living-game-server-production.up.railway.app';
+
+    for (const animal of this._wildlife) {
+      if (animal.claimed) continue;
+
+      // Animate golden deer glow.
+      if (animal.isGolden && animal.glowGraphics) {
+        const pulse = 0.5 + 0.5 * Math.sin(time * 0.005 + animal.x * 0.01);
+        const glow = animal.glowGraphics;
+        glow.clear();
+        glow.fillStyle(0xffd700, 0.15 + pulse * 0.2);
+        glow.fillCircle(animal.x, animal.y, 28 + pulse * 8);
+        glow.fillStyle(0xffee55, 0.3 + pulse * 0.25);
+        glow.fillCircle(animal.x, animal.y, 16 + pulse * 4);
+
+        // Pulse tint on sprite — oscillate between bright gold and white-gold.
+        const tintR = 255;
+        const tintG = Math.round(200 + pulse * 55);
+        const tintB = Math.round(pulse * 80);
+        animal.sprite.setTint(Phaser.Display.Color.GetColor(tintR, tintG, tintB));
+
+        // Check if local player is within 2 tiles.
+        const dist = Phaser.Math.Distance.Between(
+          this.player.x, this.player.y, animal.x, animal.y
+        );
+        if (dist < this._WILDLIFE_GOLDEN_DIST) {
+          animal.claimed = true;
+          this._goldenDeerActive = false;
+
+          const playerName = this._selfName || 'Explorer';
+          const msg = `👑 ${playerName} approached the golden deer and earns a crown!`;
+
+          // Show toast locally.
+          this._showToast(msg, 5000);
+
+          // Emit socket event for leaderboard point.
+          if (this._socket && this._socket.connected) {
+            this._socket.emit('golden:deer:claimed', {
+              playerName,
+              githubUser: new URLSearchParams(window.location.search).get('gh') || '',
+            });
+          }
+
+          // Log to server for all-player broadcast.
+          fetch(`${serverUrl}/log-event`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              playerName,
+              message: msg,
+              type: 'golden_deer',
+            }),
+          }).catch(() => {});
+
+          // Vanish with a brief sparkle tween.
+          this.tweens.add({
+            targets: animal.sprite,
+            alpha: 0,
+            scaleX: 2,
+            scaleY: 2,
+            duration: 600,
+            ease: 'Quad.easeOut',
+            onComplete: () => this._removeAnimal(animal),
+          });
+          if (animal.glowGraphics) {
+            this.tweens.add({
+              targets: animal.glowGraphics,
+              alpha: 0,
+              duration: 500,
+              ease: 'Quad.easeOut',
+            });
+          }
+
+          console.log('[wildlife] golden deer claimed by', playerName);
+        }
       }
     }
   }
