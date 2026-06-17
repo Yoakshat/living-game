@@ -87,10 +87,16 @@ export default class WorldScene extends Phaser.Scene {
     // --- Campfire (decorative landmark at world center) ---------------------
     const cfx = this.worldW / 2;
     const cfy = this.worldH / 2;
-    this.add.image(cfx, cfy, 'campfire').setDepth(cfy);
+    this._campfireSprite = this.add.image(cfx, cfy, 'campfire').setDepth(cfy);
     // Store campfire position for night-cycle glow
     this._campfireX = cfx;
     this._campfireY = cfy;
+
+    // Extra glow sprite drawn behind campfire — only visible at night.
+    // We use a soft orange circle rendered with Graphics, pulsing in the update loop.
+    this._campfireGlow = this.add.graphics();
+    this._campfireGlow.setDepth(cfy - 1); // just below the campfire sprite
+    this._campfireGlow.setAlpha(0);       // starts invisible (daytime)
 
     // --- River (horizontal water strip, ~30% down the map) ------------------
     // Tiles row 6-8 (0-indexed), full width. Static bodies block passage.
@@ -1338,6 +1344,11 @@ export default class WorldScene extends Phaser.Scene {
     }
 
     this._nightOverlay.clear();
+    // Clear campfire glow when fully daytime.
+    if (nightAlpha <= 0.01) {
+      this._campfireGlow.clear();
+      this._campfireGlow.setAlpha(0);
+    }
     if (nightAlpha > 0.01) {
       const cam = this.cameras.main;
       const camX = cam.scrollX;
@@ -1387,7 +1398,16 @@ export default class WorldScene extends Phaser.Scene {
       }
 
       // 4. Campfire — warm orange glow at world centre.
-      drawLight(this._campfireX, this._campfireY, LIGHT_R, 0xff6a00);
+      // At night, also pulse the dedicated campfire glow sprite for extra flicker.
+      const cfPulse = 0.7 + 0.3 * Math.sin(time * 0.006) * Math.sin(time * 0.0037);
+      const cfGlowR = 38 + cfPulse * 18;
+      this._campfireGlow.clear();
+      this._campfireGlow.fillStyle(0xff8800, 0.55 * nightAlpha * cfPulse);
+      this._campfireGlow.fillCircle(this._campfireX, this._campfireY, cfGlowR * 1.6);
+      this._campfireGlow.fillStyle(0xffcc44, 0.75 * nightAlpha * cfPulse);
+      this._campfireGlow.fillCircle(this._campfireX, this._campfireY, cfGlowR);
+      this._campfireGlow.setAlpha(nightAlpha);
+      drawLight(this._campfireX, this._campfireY, LIGHT_R * (1 + cfPulse * 0.15), 0xff6a00);
 
       // 5. Imperial beacon tower (~30%/15%) — cool white-blue beacon light.
       drawLight(this._beaconTowerX, this._beaconTowerY, LIGHT_R, 0x88aaff);
