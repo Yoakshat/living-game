@@ -64,6 +64,16 @@ export default class WorldScene extends Phaser.Scene {
     // Treasure score for this session (counts local claims).
     this._treasureScore = 0;
 
+    // Footprint trails: Map<playerId, { marks: [{x, y, time}], graphics: Graphics }>
+    // Each remote player has up to 30 position marks that fade after 3 minutes.
+    this._footprints = new Map();
+    // How many positions to keep per remote player.
+    this._FOOTPRINT_MAX = 30;
+    // How long each footmark lasts (ms) — 3 minutes.
+    this._FOOTPRINT_TTL = 180000;
+    // Minimum distance (px) between recorded footmarks to avoid clutter.
+    this._FOOTPRINT_MIN_DIST = 16;
+
     // Elevation zones: hill and valley regions that affect movement speed and view radius.
     // Hills slow you 20% going uphill (entering), speed you 15% going downhill (leaving).
     // Standing on high ground extends view radius by 1.5 tiles during night.
@@ -645,6 +655,11 @@ export default class WorldScene extends Phaser.Scene {
       callbackScope: this,
     });
 
+    // --- Footprint trail graphics layer (below players, above ground) ----------
+    // One shared Graphics object redrawn each frame for all remote player trails.
+    this._footprintGraphics = this.add.graphics();
+    this._footprintGraphics.setDepth(50); // above ground (depth 0-1), below players
+
     // Mark scene ready — flush any queued events.
     this._ready = true;
     for (const fn of this._eventQueue) fn();
@@ -1126,6 +1141,23 @@ export default class WorldScene extends Phaser.Scene {
     if (!rp) return;
     rp.targetX = data.x;
     rp.targetY = data.y;
+
+    // Record a footmark at the new position (throttled by minimum distance).
+    const fp = this._footprints.get(data.id);
+    if (fp) {
+      const dx = data.x - fp.lastX;
+      const dy = data.y - fp.lastY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist >= this._FOOTPRINT_MIN_DIST) {
+        fp.marks.push({ x: data.x, y: data.y, time: Date.now() });
+        fp.lastX = data.x;
+        fp.lastY = data.y;
+        // Prune to max 30 entries (remove oldest).
+        if (fp.marks.length > this._FOOTPRINT_MAX) {
+          fp.marks.shift();
+        }
+      }
+    }
   }
 
   _onPlayerLeft(data) {
@@ -1134,6 +1166,8 @@ export default class WorldScene extends Phaser.Scene {
     rp.sprite.destroy();
     rp.nameTag.destroy();
     this.remotePlayers.delete(data.id);
+    // Clean up footprint trail for departed player.
+    this._footprints.delete(data.id);
     console.log('[multiplayer] player left:', data.id);
   }
 
@@ -1183,6 +1217,9 @@ export default class WorldScene extends Phaser.Scene {
       targetY: y,
       color,
     });
+
+    // Initialise footprint trail for this remote player.
+    this._footprints.set(id, { marks: [], lastX: x, lastY: y });
 
     // Register color for log panel
     if (this._gameLog) this._gameLog.setPlayerColor(name, color);
@@ -2052,6 +2089,9 @@ export default class WorldScene extends Phaser.Scene {
 
     // ---- Weather: update rain particles each frame ---------------------------
     this._updateRain(delta);
+
+    // ---- Footprint trails: redraw remote player trails each frame -------------
+    this._updateFootprints();
   }
 
   // ---- Weather system -------------------------------------------------------
@@ -2530,6 +2570,47 @@ export default class WorldScene extends Phaser.Scene {
       }
       if (!rpInsideTerr && rp.color) {
         rp.sprite.setTint(Phaser.Display.Color.HexStringToColor(rp.color).color);
+      }
+    }
+  }
+
+  // ---- Footprint trails -------------------------------------------------------
+
+  // Redraw all remote player footprint trails, pruning expired marks.
+  // Called each update frame. Footmarks are NOT shown for the local player.
+  _updateFootprints() {
+    const now = Date.now();
+    const g = this._footprintGraphics;
+    g.clear();
+
+    for (const [id, fp] of this._footprints) {
+      const rp = this.remotePlayers.get(id);
+      if (!rp) continue;
+
+      // Remove marks older than 3 minutes.
+      while (fp.marks.length > 0 && now - fp.marks[0].time > this._FOOTPRINT_TTL) {
+        fp.marks.shift();
+      }
+
+      if (fp.marks.length === 0) continue;
+
+      // Parse the player's hex color once per frame.
+      const colorInt = Phaser.Display.Color.HexStringToColor(rp.color).color;
+
+      for (let i = 0; i < fp.marks.length; i++) {
+        const mark = fp.marks[i];
+        const age = now - mark.time;
+
+        // Alpha: newest marks are 0.25, oldest marks fade toward 0.05.
+        // age 0 → alpha 0.25; age FOOTPRINT_TTL → alpha 0.05
+        const ageRatio = age / this._FOOTPRINT_TTL; // 0 (fresh) → 1 (expiring)
+        const alpha = 0.25 - ageRatio * 0.20; // 0.25 → 0.05
+
+        // Radius: newest marks are slightly larger (5px), oldest are 3px.
+        const radius = 5 - ageRatio * 2; // 5 → 3
+
+        g.fillStyle(colorInt, Math.max(alpha, 0.04));
+        g.fillCircle(mark.x, mark.y, Math.max(radius, 2));
       }
     }
   }
