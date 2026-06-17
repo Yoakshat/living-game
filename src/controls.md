@@ -80,6 +80,7 @@ POST /quit        → shuts down the agent server cleanly
 | Ruined stone arch  | Far northwest corner (~8%, 8%)  | Ancient overgrown arch with vines and moss — remnant of a lost civilization; collidable |
 | Map fragments      | 5 scattered in distant corners/edges (~4-5%/95-97% of map width/height, plus far north-mid edge) | Glowing parchment scraps; walk near one to collect it. A counter (top-left) tracks progress; collecting all 5 shows "World map fully discovered!" |
 | Hidden ruins       | 7 positions in underexplored edges and corners (far west/east mid, deep south corners, far south, far north-right, upper-left above river) | Invisible crumbled stone blocks until discovered. Walk within 3 tiles (~144px) to trigger a flash reveal — ruins become permanently visible to all players. A toast message announces each discovery. |
+| Aurora borealis    | North bank (visible only when camera is north of the river) | Shimmering green and purple curtains of light ripple across the top 30% of the screen during the night phase (dusk, night, dawn). Animated sine-wave particle bands sweep horizontally. Cross the bridge after dark to see it. |
 
 | Explorer scrolls   | Anywhere                        | Glowing parchment notes left by players; walk within 2 tiles (~96px) to read. Press N to leave one (up to 40 chars). Disappears after 10 minutes. |
 

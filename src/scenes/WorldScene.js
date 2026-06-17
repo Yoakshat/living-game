@@ -433,6 +433,15 @@ export default class WorldScene extends Phaser.Scene {
       this._tryClaimTerritory();
     });
 
+    // --- Aurora borealis (north bank night sky) -----------------------------
+    // Shimmering curtains of green and purple light ripple across the top 30%
+    // of the screen.  Only visible when the camera is north of the river and
+    // during the night phase (nightAlpha > 0).
+    // Implemented as camera-fixed particle bands drawn each frame.
+    this._auroraGraphics = this.add.graphics();
+    this._auroraGraphics.setScrollFactor(0);
+    this._auroraGraphics.setDepth(9510); // above night overlay (9500) but below HUD
+
     // --- Introspection hook -------------------------------------------------
     const scene = this;
     this._pendingVotes = []; // PRs waiting for this agent's vote
@@ -1850,8 +1859,98 @@ export default class WorldScene extends Phaser.Scene {
       }
     }
 
+    // ---- Aurora borealis (north bank, night only) ----------------------------
+    this._updateAurora(time, nightAlpha);
+
     // ---- Weather: update rain particles each frame ---------------------------
     this._updateRain(delta);
+  }
+
+  // ---- Aurora borealis -------------------------------------------------------
+
+  // Draw shimmering green/purple aurora curtains in the top 30% of screen.
+  // Only active when:
+  //   (a) nightAlpha > 0 (night/dusk/dawn phase), and
+  //   (b) the camera's centre world-Y is north of the river (worldY < row-6 * tile).
+  //
+  // Rendered as multiple sine-wave "band" strips sweeping across the viewport in
+  // camera-space.  Each band is a series of short vertical line segments whose
+  // height is modulated by a sine wave, giving the classic curtain ripple effect.
+  _updateAurora(time, nightAlpha) {
+    const g = this._auroraGraphics;
+    g.clear();
+
+    if (nightAlpha <= 0.01) return;
+
+    // The aurora is visible only when the camera is north of the river.
+    // River starts at tile row 6; tile size from meta (or fall back to 48).
+    const T = (this.meta && this.meta.tile) ? this.meta.tile : 48;
+    const RIVER_WORLD_Y = 6 * T; // top of river in world pixels
+    const cam = this.cameras.main;
+    // Camera centre in world-space.
+    const camCentreY = cam.scrollY + (cam.height / cam.zoom) / 2;
+    if (camCentreY >= RIVER_WORLD_Y) return; // south of river — no aurora
+
+    const camW = cam.width;
+    const camH = cam.height;
+
+    // The aurora occupies the top 30% of the screen.
+    const AURORA_ZONE_H = camH * 0.30;
+
+    // Aurora parameters
+    const NUM_BANDS = 5;
+    // Slowly animate intensity: peaks at full night, fades during dusk/dawn.
+    const intensity = nightAlpha;
+
+    // Band colours alternate green / purple / teal.
+    const BAND_COLORS = [
+      { r: 0x00, g: 0xff, b: 0x88 }, // bright green
+      { r: 0x88, g: 0x00, b: 0xff }, // purple
+      { r: 0x00, g: 0xee, b: 0xcc }, // teal
+      { r: 0x44, g: 0xff, b: 0x44 }, // lime green
+      { r: 0xaa, g: 0x44, b: 0xff }, // violet
+    ];
+
+    // Number of vertical slices per band (resolution of sine wave).
+    const SLICES = 60;
+    const sliceW = camW / SLICES;
+
+    for (let bi = 0; bi < NUM_BANDS; bi++) {
+      const col = BAND_COLORS[bi % BAND_COLORS.length];
+
+      // Each band has a unique phase offset and sweep speed.
+      const phaseOffset = bi * Math.PI * 0.7;
+      const sweepSpeed = 0.00045 + bi * 0.00012;
+      const verticalSpeed = 0.00030 + bi * 0.00010;
+
+      // Band centre Y oscillates slowly in the aurora zone.
+      const bandCentreY =
+        AURORA_ZONE_H * (0.20 + 0.20 * Math.sin(time * verticalSpeed + phaseOffset * 1.3)) +
+        AURORA_ZONE_H * (bi / NUM_BANDS) * 0.55;
+
+      // Curtain "drape" height per slice (varies with sine wave).
+      const baseHeight = AURORA_ZONE_H * 0.28;
+
+      for (let si = 0; si < SLICES; si++) {
+        const sx = si * sliceW;
+        const phase = (sx / camW) * Math.PI * 3.5 + time * sweepSpeed + phaseOffset;
+        const curtainH = baseHeight * (0.5 + 0.5 * Math.sin(phase));
+
+        // Brightness also ripples slightly.
+        const brightnessMod = 0.5 + 0.5 * Math.sin(phase * 1.7 + time * 0.0007);
+        const alpha = intensity * (0.18 + 0.25 * brightnessMod);
+
+        const hexCol = (col.r << 16) | (col.g << 8) | col.b;
+
+        // Draw a short vertical rect for this slice of curtain.
+        g.fillStyle(hexCol, alpha);
+        g.fillRect(sx, bandCentreY, sliceW + 1, curtainH);
+
+        // A brighter glowing top edge.
+        g.fillStyle(hexCol, alpha * 0.55);
+        g.fillRect(sx, bandCentreY - 3, sliceW + 1, 5);
+      }
+    }
   }
 
   // ---- Weather system -------------------------------------------------------
