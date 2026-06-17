@@ -1067,6 +1067,95 @@ function makeStoneArchTexture(scene, key) {
   return { w: ARCH_W, h: ARCH_H };
 }
 
+// --- Hidden ruin -----------------------------------------------------------
+// Crumbled stone blocks half-buried in the earth, dark gray with hints of
+// green moss. These ruins start invisible (alpha=0) and flash into view when
+// a player walks within 3 tiles. They mark the remains of something ancient.
+const RUIN_W = 56;
+const RUIN_H = 52;
+
+function makeRuinTexture(scene, key) {
+  const g = scene.make.graphics({ x: 0, y: 0, add: false });
+  const cx = RUIN_W / 2;
+  const cy = RUIN_H / 2 + 2;
+
+  // Ground shadow under the rubble.
+  g.fillStyle(0x000000, 0.28);
+  g.fillEllipse(cx, RUIN_H - 6, 46, 12);
+
+  // Main collapsed stone blocks — irregular, tumbled layout.
+  // Center-left large block.
+  g.fillStyle(0x4a4a42, 1);
+  g.fillRoundedRect(cx - 22, cy - 10, 22, 16, 2);
+  g.fillStyle(0x6a6a5e, 0.8);   // lit face (top-left)
+  g.fillRect(cx - 21, cy - 9, 8, 5);
+  g.fillStyle(0x2e2e28, 0.9);   // shadow face (bottom-right)
+  g.fillRect(cx - 5, cy - 2, 4, 5);
+
+  // Upper-right angled block (slightly rotated appearance via polygon).
+  g.fillStyle(0x525248, 1);
+  g.fillPoints(
+    toPoints([cx - 2, cy - 18, cx + 18, cy - 14, cx + 16, cy - 4, cx - 4, cy - 8]),
+    true
+  );
+  g.fillStyle(0x747468, 0.7);
+  g.fillPoints(
+    toPoints([cx - 2, cy - 18, cx + 18, cy - 14, cx + 14, cy - 14, cx - 2, cy - 17]),
+    true
+  );
+
+  // Lower-right smaller rubble block.
+  g.fillStyle(0x44443c, 1);
+  g.fillRoundedRect(cx + 2, cy + 2, 18, 12, 2);
+  g.fillStyle(0x626258, 0.7);
+  g.fillRect(cx + 3, cy + 3, 7, 4);
+  g.fillStyle(0x282824, 0.8);
+  g.fillRect(cx + 14, cy + 8, 5, 4);
+
+  // Small scattered stone chips (rubble debris).
+  const chips = [
+    { x: cx - 24, y: cy + 6, w: 8, h: 5 },
+    { x: cx + 18, y: cy - 2, w: 6, h: 4 },
+    { x: cx - 16, y: cy + 12, w: 10, h: 5 },
+    { x: cx + 10, y: cy + 12, w: 7, h: 4 },
+  ];
+  for (const c of chips) {
+    g.fillStyle(0x3e3e36, 1);
+    g.fillRoundedRect(c.x, c.y, c.w, c.h, 1);
+    g.fillStyle(0x5a5a50, 0.5);
+    g.fillRect(c.x + 1, c.y + 1, Math.round(c.w * 0.5), 2);
+  }
+
+  // Crack lines across the main block.
+  g.lineStyle(1, 0x1e1e18, 0.8);
+  g.beginPath();
+  g.moveTo(cx - 14, cy - 10);
+  g.lineTo(cx - 8, cy - 4);
+  g.strokePath();
+  g.beginPath();
+  g.moveTo(cx - 18, cy - 6);
+  g.lineTo(cx - 12, cy + 2);
+  g.strokePath();
+
+  // Moss patches — soft green blotches on stone surfaces.
+  const mossPatches = [
+    { x: cx - 18, y: cy - 4, rx: 6, ry: 4 },
+    { x: cx + 8,  y: cy - 10, rx: 5, ry: 3 },
+    { x: cx - 8,  y: cy + 6, rx: 4, ry: 3 },
+    { x: cx + 16, y: cy + 4, rx: 4, ry: 3 },
+  ];
+  for (const m of mossPatches) {
+    g.fillStyle(0x3a6e30, 0.5);
+    g.fillEllipse(m.x, m.y, m.rx * 2, m.ry * 2);
+    g.fillStyle(0x5aaa46, 0.35);
+    g.fillEllipse(m.x - 1, m.y - 1, m.rx, m.ry);
+  }
+
+  g.generateTexture(key, RUIN_W, RUIN_H);
+  g.destroy();
+  return { w: RUIN_W, h: RUIN_H };
+}
+
 // --- Map fragment -----------------------------------------------------------
 // A torn scrap of an old parchment map, half-curled, with faint ink lines and
 // a glowing golden edge so it reads as a valuable collectible against the
@@ -1248,8 +1337,8 @@ export function generateTextures(scene) {
   // Map fragment — collectible parchment scrap, scattered in distant corners.
   const mapFragment = makeMapFragmentTexture(scene, 'map-fragment');
 
-  // Explorer scroll — glowing parchment left on the ground by a player.
-  const scroll = makeScrollTexture(scene, 'scroll');
+  // Hidden ruin — crumbled stone blocks with moss; starts invisible, revealed by proximity.
+  const ruin = makeRuinTexture(scene, 'ruin');
 
   return {
     tile: TILE,
@@ -1267,6 +1356,6 @@ export function generateTextures(scene) {
     runeStone,
     stoneArch,
     mapFragment,
-    scroll,
+    ruin,
   };
 }

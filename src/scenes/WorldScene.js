@@ -275,6 +275,31 @@ export default class WorldScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(10003);
 
+    // --- Hidden ruins (placed in underexplored areas at the edges/corners) ----
+    // Ruins start invisible (alpha=0). When any player walks within 3 tiles
+    // (~144px), the ruin flashes into view permanently for all players.
+    // Positions chosen to be far from the campfire center, river, and existing
+    // landmarks — rewarding players who push to the edges of the world.
+    const RUIN_SPOTS = [
+      { x: this.worldW * 0.06, y: this.worldH * 0.55 },   // far west edge, mid
+      { x: this.worldW * 0.94, y: this.worldH * 0.48 },   // far east edge, mid
+      { x: this.worldW * 0.18, y: this.worldH * 0.90 },   // south-west deep corner
+      { x: this.worldW * 0.82, y: this.worldH * 0.88 },   // south-east deep corner
+      { x: this.worldW * 0.42, y: this.worldH * 0.96 },   // far south, slightly left
+      { x: this.worldW * 0.72, y: this.worldH * 0.05 },   // far north, right of beacon
+      { x: this.worldW * 0.14, y: this.worldH * 0.20 },   // upper-left, above river
+    ];
+    this._ruins = RUIN_SPOTS.map((spot, i) => {
+      const rx = Math.round(spot.x);
+      const ry = Math.round(spot.y);
+      const sprite = this.add
+        .image(rx, ry, 'ruin')
+        .setOrigin(0.5, 0.5)
+        .setDepth(ry + meta.ruin.h / 2)
+        .setAlpha(0);  // hidden until discovered
+      return { id: i, x: rx, y: ry, sprite, revealed: false };
+    });
+
     // Toast — brief camera-fixed message shown on pickup / full discovery.
     this._toastText = this.add
       .text(0, 0, '', {
@@ -594,6 +619,24 @@ export default class WorldScene extends Phaser.Scene {
         // Re-fetch the PR info from the tally so we have title/url.
         // For now just log — the server will re-emit pr:review_needed once CI passes on the new SHA.
         console.log(`[governance] PR #${prNumber} updated (SHA ${sha.slice(0, 7)}) — votes wiped, awaiting new CI green`);
+      });
+    });
+
+    // Another player revealed a hidden ruin — make it visible locally too.
+    socket.on('ruin:revealed', (data) => {
+      this._enqueue(() => {
+        const ruin = this._ruins && this._ruins.find((r) => r.id === data.ruinId);
+        if (ruin && !ruin.revealed) {
+          ruin.revealed = true;
+          this.tweens.add({
+            targets: ruin.sprite,
+            alpha: 1,
+            duration: 300,
+            ease: 'Sine.easeOut',
+            onStart: () => { ruin.sprite.setTint(0xffffff); },
+            onComplete: () => { ruin.sprite.clearTint(); },
+          });
+        }
       });
     });
 
@@ -981,6 +1024,82 @@ export default class WorldScene extends Phaser.Scene {
     }
   }
 
+  // ---- Hidden ruins ----------------------------------------------------------
+  // Check if any player (local or remote) is within 3 tiles of an unrevealed
+  // ruin. If so, trigger a flash reveal tween and mark it as permanent.
+  _checkRuinProximity() {
+    const REVEAL_DIST = this.meta.tile * 3; // 3 tiles in world pixels
+    for (const ruin of this._ruins) {
+      if (ruin.revealed) continue;
+
+      // Check local player distance.
+      let triggered =
+        Phaser.Math.Distance.Between(
+          this.player.x, this.player.y, ruin.x, ruin.y
+        ) < REVEAL_DIST;
+
+      // Also check remote players so discovery happens for any player near the ruin.
+      if (!triggered) {
+        for (const [, rp] of this.remotePlayers) {
+          if (
+            Phaser.Math.Distance.Between(rp.sprite.x, rp.sprite.y, ruin.x, ruin.y) <
+            REVEAL_DIST
+          ) {
+            triggered = true;
+            break;
+          }
+        }
+      }
+
+      if (triggered) {
+        ruin.revealed = true;
+        // Flash: briefly surge to bright white then settle at full opacity.
+        this.tweens.add({
+          targets: ruin.sprite,
+          alpha: 1,
+          duration: 120,
+          ease: 'Quad.easeOut',
+          onStart: () => {
+            // White flash overlay — tint the sprite to near-white at the start.
+            ruin.sprite.setTint(0xffffff);
+          },
+          onComplete: () => {
+            // Fade tint back to normal over 400ms.
+            this.tweens.addCounter({
+              from: 255,
+              to: 0,
+              duration: 400,
+              ease: 'Sine.easeOut',
+              onUpdate: (tween) => {
+                const v = Math.round(tween.getValue());
+                const col = Phaser.Display.Color.GetColor(v, v, v);
+                // Blend white tint toward neutral (no tint = 0xffffff in Phaser means no change).
+                // Remove tint once fully faded.
+                if (v <= 10) {
+                  ruin.sprite.clearTint();
+                } else {
+                  ruin.sprite.setTint(Phaser.Display.Color.GetColor(
+                    Math.min(255, 155 + v),
+                    Math.min(255, 155 + v),
+                    Math.min(255, 155 + v)
+                  ));
+                }
+              },
+            });
+          },
+        });
+
+        // Emit discovery via socket so other players see it too.
+        if (this._socket && this._socket.connected) {
+          this._socket.emit('ruin:revealed', { ruinId: ruin.id, x: ruin.x, y: ruin.y });
+        }
+
+        this._showToast('Ancient ruins discovered!', 2800);
+        console.log('[ruins] ruin', ruin.id, 'revealed at', ruin.x, ruin.y);
+      }
+    }
+  }
+
   // ---- Obstacle helpers (unchanged) ----------------------------------------
   buildPlacements(T) {
     const rng = mulberry32(20260527);
@@ -1324,8 +1443,8 @@ export default class WorldScene extends Phaser.Scene {
     }
     this._checkFragmentPickups();
 
-    // Meteor craters: pulse glow, expire old craters, claim if player is close.
-    this._checkMeteors(time);
+    // Hidden ruins: reveal if any player is within 3 tiles (144px).
+    this._checkRuinProximity();
 
     // Rune stone glow pulse — a slow sine-wave tint cycle on the stone sprite.
     // Alternates between pale cyan-white and the base sprite color.
