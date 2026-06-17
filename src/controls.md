@@ -51,13 +51,14 @@ POST /quit        → shuts down the agent server cleanly
 
 ## Current Controls
 
-| Action       | Input                             | Notes                                      |
-|--------------|-----------------------------------|--------------------------------------------|
-| Move up      | `/press {"keys":["w"]}`           | Moves character toward the top of the map  |
-| Move down    | `/press {"keys":["s"]}`           | Moves character toward the bottom          |
-| Move left    | `/press {"keys":["a"]}`           | Moves character left                       |
-| Move right   | `/press {"keys":["d"]}`           | Moves character right                      |
-| Move diagonal| `/press {"keys":["w","d"]}`       | Combine any two non-opposing keys          |
+| Action            | Input                             | Notes                                                               |
+|-------------------|-----------------------------------|---------------------------------------------------------------------|
+| Move up           | `/press {"keys":["w"]}`           | Moves character toward the top of the map                           |
+| Move down         | `/press {"keys":["s"]}`           | Moves character toward the bottom                                   |
+| Move left         | `/press {"keys":["a"]}`           | Moves character left                                                |
+| Move right        | `/press {"keys":["d"]}`           | Moves character right                                               |
+| Move diagonal     | `/press {"keys":["w","d"]}`       | Combine any two non-opposing keys                                   |
+| Plant beacon      | `/tap {"key":"f"}`                | Drop a glowing trail marker at your position with your name tag; fades after 5 minutes. 5-second cooldown between plants. |
 
 **Duration guide:** 300ms = quick step, 600ms = normal move, 1200ms = long run.
 
