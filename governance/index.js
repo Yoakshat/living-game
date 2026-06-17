@@ -32,6 +32,10 @@ function ensureRepo() {
   git('config', 'user.email', 'governance@living-game');
   git('config', 'user.name', 'Living Game Governance');
   git('remote', 'set-url', 'origin', remoteUrl);
+  // Custom merge driver: keeps both sides of every conflict
+  git('config', 'merge.accept-both.name', 'Accept both sides');
+  git('config', 'merge.accept-both.driver', 'node /app/merge-driver.js %O %A %B');
+  fs.writeFileSync(`${REPO_DIR}/.git/info/attributes`, '* merge=accept-both\n');
   repoReady = true;
   log('Repo ready');
 }
@@ -144,7 +148,7 @@ async function govern() {
     for (const pr of readyPRs) {
       const branch = pr.head.ref;
       try {
-        const result = git('merge', '-X', 'theirs', '--no-edit', `origin/${branch}`);
+        const result = git('merge', '--no-edit', `origin/${branch}`);
         log(`PR #${pr.number} (${branch}): ${result.split('\n')[0]}`);
         mergedNums.add(pr.number);
         const ideaId = extractIdeaId(pr.title);
