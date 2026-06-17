@@ -114,20 +114,20 @@ export default class WorldScene extends Phaser.Scene {
     // --- Day/night cycle overlay --------------------------------------------
     // Sits above the world but below HUD elements.
     // The overlay is a full-screen dark rectangle (camera-fixed) whose alpha
-    // varies with the cycle phase.  At night we also punch a "torch" hole
-    // around each player so they can only see ~150 px around themselves, and
-    // lighter glow halos around landmark beacons (campfire, well, cave area).
+    // varies with the cycle phase.  At night we punch "light circle" holes
+    // around each player (~4 tiles / 192px) and around fixed landmark light
+    // sources (campfire, beacon tower, meditation chamber, healing spring).
     //
     // Cycle timing (ms):
     //   DAY  180 000  (3 min, fully transparent overlay)
-    //   DUSK  60 000  (1 min transition day→night)
-    //   NIGHT 120 000 (2 min dark)
-    //   DAWN  60 000  (1 min transition night→day)
-    //   Total cycle: 420 000 ms (7 min)
+    //   DUSK  30 000  (30s transition day→night)
+    //   NIGHT  90 000  (90s dark)
+    //   DAWN   30 000  (30s transition night→day)
+    //   Total cycle: 330 000 ms (5.5 min)
     this._DN_DAY_MS   = 180000;
-    this._DN_DUSK_MS  =  60000;
-    this._DN_NIGHT_MS = 120000;
-    this._DN_DAWN_MS  =  60000;
+    this._DN_DUSK_MS  =  30000;
+    this._DN_NIGHT_MS =  90000;
+    this._DN_DAWN_MS  =  30000;
     this._DN_CYCLE_MS = this._DN_DAY_MS + this._DN_DUSK_MS + this._DN_NIGHT_MS + this._DN_DAWN_MS;
     this._dnStartTime = 0;  // set in update once time is available
 
@@ -173,18 +173,27 @@ export default class WorldScene extends Phaser.Scene {
       .image(springX, springY, 'healing-spring')
       .setOrigin(0.5, 0.5)
       .setDepth(springY + meta.healingSpring.h / 2);
+    // Store healing spring position for night-cycle glow
+    this._healingSpringX = springX;
+    this._healingSpringY = springY;
 
     // --- Imperial beacon tower (north bank, ~30%, 15%) -----------------------
     // A tall dark spire marking the seat of Imperial power — purely decorative.
     const btX = Math.round(this.worldW * 0.30);
     const btY = Math.round(this.worldH * 0.15);
     this.add.image(btX, btY, 'beacon-tower').setOrigin(0.5, 0.5).setDepth(btY + meta.beaconTower.h / 2);
+    // Store beacon tower position for night-cycle glow
+    this._beaconTowerX = btX;
+    this._beaconTowerY = btY;
 
     // --- Sith meditation chamber (north bank, ~55%, 12%) ---------------------
     // A dark circular stone platform with a faint red glow — a place of silent power.
     const mcX = Math.round(this.worldW * 0.55);
     const mcY = Math.round(this.worldH * 0.12);
     this.add.image(mcX, mcY, 'meditation-chamber').setOrigin(0.5, 0.5).setDepth(mcY + meta.meditationChamber.h / 2);
+    // Store meditation chamber position for night-cycle glow
+    this._meditationChamberX = mcX;
+    this._meditationChamberY = mcY;
 
     // --- Ruined stone arch (far northwest corner, ~8%, 8%) ------------------
     // A crumbling ancient arch swallowed by vines and moss — a remnant of a
@@ -1367,22 +1376,23 @@ export default class WorldScene extends Phaser.Scene {
       const maxAlpha = 0.85;
       const overlayAlpha = nightAlpha * maxAlpha;
 
-      // Player visibility radius in world pixels.
-      const VIS_R = 150;
-      // Beacon glow radius (campfire, well) — slightly wider than player.
-      const BEACON_R = 80;
+      // Player / light-source visibility radius in world pixels.
+      // 4 tiles × 48px/tile = 192px clear radius around each light source.
+      const VIS_R = 192;
+      // Landmark light source radius — same ~4-tile clear zone.
+      const LIGHT_R = 192;
       // How many gradient steps to approximate a radial gradient.
       const STEPS = 24;
 
-      // Helper: draw a radial "hole" cutout that softens at the edge.
-      // We draw a series of concentric circles from inside out, fading from
-      // 0 alpha (transparent, = visible area) to overlayAlpha (dark).
-      const drawHole = (wx, wy, radius) => {
+      // Helper: draw a radial "light circle" that is clear at the centre and
+      // fades to the overlay darkness at the edge.
+      // colour: Phaser hex colour used for the soft glow tint at the edge.
+      const drawLight = (wx, wy, radius, colour) => {
         for (let s = 0; s < STEPS; s++) {
           const t2 = s / STEPS;
           const holeAlpha = overlayAlpha * t2 * t2; // quadratic fade
           const r = radius * (1 - t2);
-          this._nightOverlay.fillStyle(0x000d1a, holeAlpha);
+          this._nightOverlay.fillStyle(colour, holeAlpha);
           this._nightOverlay.fillCircle(wx, wy, r);
         }
       };
@@ -1391,40 +1401,25 @@ export default class WorldScene extends Phaser.Scene {
       this._nightOverlay.fillStyle(0x000d1a, overlayAlpha);
       this._nightOverlay.fillRect(camX, camY, wW, wH);
 
-      // 2. Punch visibility holes — local player.
-      drawHole(this.player.x, this.player.y, VIS_R);
+      // 2. Punch visibility holes — local player sees normally within ~4 tiles.
+      drawLight(this.player.x, this.player.y, VIS_R, 0x000d1a);
 
-      // 3. Remote players also get a small personal visibility radius.
+      // 3. Remote players also get a personal light radius.
       for (const [, rp] of this.remotePlayers) {
-        drawHole(rp.sprite.x, rp.sprite.y, VIS_R * 0.8);
+        drawLight(rp.sprite.x, rp.sprite.y, VIS_R * 0.85, 0x000d1a);
       }
 
-      // 4. Campfire beacon glow (warm orange tint).
-      for (let s = 0; s < STEPS; s++) {
-        const t2 = s / STEPS;
-        const holeAlpha = overlayAlpha * t2 * t2;
-        const r = BEACON_R * (1 - t2);
-        this._nightOverlay.fillStyle(0xff6a00, holeAlpha);
-        this._nightOverlay.fillCircle(this._campfireX, this._campfireY, r);
-      }
+      // 4. Campfire — warm orange glow at world centre.
+      drawLight(this._campfireX, this._campfireY, LIGHT_R, 0xff6a00);
 
-      // 5. Well beacon glow (soft blue).
-      for (let s = 0; s < STEPS; s++) {
-        const t2 = s / STEPS;
-        const holeAlpha = overlayAlpha * t2 * t2;
-        const r = BEACON_R * 0.7 * (1 - t2);
-        this._nightOverlay.fillStyle(0x4488ff, holeAlpha);
-        this._nightOverlay.fillCircle(this._wellX, this._wellY, r);
-      }
+      // 5. Imperial beacon tower (~30%/15%) — cool white-blue beacon light.
+      drawLight(this._beaconTowerX, this._beaconTowerY, LIGHT_R, 0x88aaff);
 
-      // 6. Cave entrance beacon (faint purple).
-      for (let s = 0; s < STEPS; s++) {
-        const t2 = s / STEPS;
-        const holeAlpha = overlayAlpha * t2 * t2;
-        const r = BEACON_R * 0.6 * (1 - t2);
-        this._nightOverlay.fillStyle(0xaa44cc, holeAlpha);
-        this._nightOverlay.fillCircle(this._caveX, this._caveY, r);
-      }
+      // 6. Meditation chamber (~55%/12%) — deep crimson glow.
+      drawLight(this._meditationChamberX, this._meditationChamberY, LIGHT_R, 0xcc2244);
+
+      // 7. Healing spring (~65%/72%) — soft teal glow.
+      drawLight(this._healingSpringX, this._healingSpringY, LIGHT_R, 0x22ddbb);
     }
 
     // Clock label — bottom-right of viewport.
