@@ -471,7 +471,9 @@ export default class WorldScene extends Phaser.Scene {
     const ps = meta.player.size;
     this.player.body.setSize(ps * 0.5, ps * 0.4);
     this.player.body.setOffset(ps * 0.25, ps * 0.5);
-    this.player.setDepth(spawn.y);
+    // Depth 9250: above fog layer (9200) so the local player is always visible
+    // through the fog as they explore. Remote players use the same base.
+    this.player.setDepth(9250);
     this.facing = 'down';
 
     this.physics.add.collider(this.player, this.obstacles);
@@ -644,6 +646,49 @@ export default class WorldScene extends Phaser.Scene {
       callback: this._spawnTreasureChests,
       callbackScope: this,
     });
+
+    // --- Fog of war ----------------------------------------------------------
+    // A dark RenderTexture covers the entire world. Tiles are permanently
+    // revealed as the local player walks through them. Each revealed tile
+    // erases a circle of fog, giving a genuine sense of exploration.
+    //
+    // Depth 9200: above terrain/obstacles/beacons but below the night overlay
+    // (9500) and all HUD layers (10000+). Player sprites at depth=y are well
+    // below 9200 for most of the map, so players always render under the fog;
+    // we compensate by giving player sprites a higher depth below.
+    this._fogRevealRadius = this.meta.tile * 3; // ~3 tiles = 144px reveal radius
+    // Set of "tx,ty" strings representing tile coords already revealed.
+    this._fogRevealedTiles = new Set();
+    // Last tile position that triggered a reveal (avoid re-drawing every frame).
+    this._fogLastTileX = -999;
+    this._fogLastTileY = -999;
+
+    // Create the full-world RenderTexture filled with dark fog.
+    this._fogRT = this.add.renderTexture(0, 0, this.worldW, this.worldH);
+    this._fogRT.setOrigin(0, 0);
+    this._fogRT.setDepth(9200);
+    // Fill with near-black semi-transparent fog.
+    this._fogRT.fill(0x000000, 0.82);
+
+    // Graphics object used as an eraser brush — we stamp it onto the RT.
+    // Blend mode ERASE punches transparent holes in the RT wherever drawn.
+    this._fogBrush = this.add.graphics();
+    this._fogBrush.setVisible(false); // never rendered directly
+
+    // Pre-reveal landmark areas so they are not shrouded at game start.
+    // campfire center (~50%, 50%)
+    this._fogPreReveal(this._campfireX, this._campfireY, this.meta.tile * 5);
+    // cave entrance (~75%, 25%)
+    this._fogPreReveal(this._caveX, this._caveY, this.meta.tile * 4);
+    // healing spring (~65%, 72%)
+    this._fogPreReveal(this._healingSpringX, this._healingSpringY, this.meta.tile * 4);
+
+    // Lift fog around the player's spawn position immediately.
+    this._fogRevealAt(spawn.x, spawn.y);
+    // Seed the last-tile cache so the update loop doesn't re-reveal on frame 1.
+    this._fogLastTileX = Math.floor(spawn.x / T);
+    this._fogLastTileY = Math.floor(spawn.y / T);
+    this._fogRevealedTiles.add(`${this._fogLastTileX},${this._fogLastTileY}`);
 
     // Mark scene ready — flush any queued events.
     this._ready = true;
@@ -1172,7 +1217,8 @@ export default class WorldScene extends Phaser.Scene {
     // Apply the server-assigned color as a tint.
     const tintColor = Phaser.Display.Color.HexStringToColor(color).color;
     sprite.setTint(tintColor);
-    sprite.setDepth(y);
+    // Keep above fog layer (9200) so remote players are always visible.
+    sprite.setDepth(9250 + y / this.worldH);
 
     const nameTag = this._makeNameTag(name);
 
@@ -1756,7 +1802,8 @@ export default class WorldScene extends Phaser.Scene {
       this._currentElevation = stillElevation;
     }
 
-    this.player.setDepth(this.player.y);
+    // Keep player above fog layer (9200) while preserving y-sort among players.
+    this.player.setDepth(9250 + this.player.y / this.worldH);
 
     // Emit position at ~20Hz while connected.
     if (this._socket && this._socket.connected) {
@@ -1781,7 +1828,8 @@ export default class WorldScene extends Phaser.Scene {
     for (const [, rp] of this.remotePlayers) {
       rp.sprite.x = Phaser.Math.Linear(rp.sprite.x, rp.targetX, LERP_ALPHA);
       rp.sprite.y = Phaser.Math.Linear(rp.sprite.y, rp.targetY, LERP_ALPHA);
-      rp.sprite.setDepth(rp.sprite.y);
+      // Keep remote players above fog layer too.
+      rp.sprite.setDepth(9250 + rp.sprite.y / this.worldH);
       rp.nameTag.setPosition(
         rp.sprite.x,
         rp.sprite.y - this.meta.player.size / 2 - 4
@@ -2052,6 +2100,9 @@ export default class WorldScene extends Phaser.Scene {
 
     // ---- Weather: update rain particles each frame ---------------------------
     this._updateRain(delta);
+
+    // ---- Fog of war: reveal tiles as the player moves -----------------------
+    this._updateFog();
   }
 
   // ---- Weather system -------------------------------------------------------
@@ -2833,6 +2884,67 @@ export default class WorldScene extends Phaser.Scene {
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) this._closeJournal();
     });
+  }
+
+  // ---- Fog of war helpers ---------------------------------------------------
+
+  // Reveal the fog around world-space position (wx, wy) using the current
+  // reveal radius. Draws an erasing circle onto the RenderTexture.
+  // This permanently lifts fog for this player session.
+  _fogRevealAt(wx, wy) {
+    const r = this._fogRevealRadius;
+    this._fogBrush.clear();
+    this._fogBrush.fillStyle(0xffffff, 1);
+    this._fogBrush.fillCircle(wx, wy, r);
+    // Erase the brush shape from the fog RenderTexture.
+    this._fogRT.erase(this._fogBrush);
+  }
+
+  // Pre-reveal a large area around a landmark (campfire, cave, spring).
+  // Uses a slightly larger radius and records all covered tiles as revealed.
+  _fogPreReveal(wx, wy, radius) {
+    const T = this.meta.tile;
+    this._fogBrush.clear();
+    this._fogBrush.fillStyle(0xffffff, 1);
+    this._fogBrush.fillCircle(wx, wy, radius);
+    this._fogRT.erase(this._fogBrush);
+
+    // Mark all tiles in this area as already revealed so the per-tile tracking
+    // in _updateFog doesn't double-draw on first pass.
+    const tileR = Math.ceil(radius / T) + 1;
+    const cx = Math.floor(wx / T);
+    const cy = Math.floor(wy / T);
+    for (let dy = -tileR; dy <= tileR; dy++) {
+      for (let dx = -tileR; dx <= tileR; dx++) {
+        const tx = cx + dx;
+        const ty = cy + dy;
+        if (tx < 0 || ty < 0 || tx >= WORLD_TILES_X || ty >= WORLD_TILES_Y) continue;
+        // Only mark if tile center is within radius.
+        const tileCx = tx * T + T / 2;
+        const tileCy = ty * T + T / 2;
+        const d = Phaser.Math.Distance.Between(wx, wy, tileCx, tileCy);
+        if (d < radius) {
+          this._fogRevealedTiles.add(`${tx},${ty}`);
+        }
+      }
+    }
+  }
+
+  // Called from update() each frame — checks if the player has moved to a new
+  // tile and reveals fog around their current position.
+  _updateFog() {
+    if (!this._fogRT) return;
+    const T = this.meta.tile;
+    const tx = Math.floor(this.player.x / T);
+    const ty = Math.floor(this.player.y / T);
+    if (tx === this._fogLastTileX && ty === this._fogLastTileY) return;
+    this._fogLastTileX = tx;
+    this._fogLastTileY = ty;
+    const key = `${tx},${ty}`;
+    if (!this._fogRevealedTiles.has(key)) {
+      this._fogRevealedTiles.add(key);
+      this._fogRevealAt(this.player.x, this.player.y);
+    }
   }
 
   // Plant a glowing trail marker at world position (wx, wy) tagged with playerName.
