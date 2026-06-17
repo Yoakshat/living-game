@@ -995,6 +995,9 @@ export default class WorldScene extends Phaser.Scene {
       this._enqueue(() => {
         this._endRace();
         this._showToast(`🏆 ${data.winner} wins the footrace!`, 4000);
+      });
+    });
+
     // A player claimed a treasure chest — show crown toast announcement.
     socket.on('chest:claimed', (data) => {
       this._enqueue(() => {
