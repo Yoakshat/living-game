@@ -59,7 +59,7 @@ async function ghFetch(path, opts = {}) {
 
 async function getCIStatus(sha) {
   const data = await ghFetch(`/commits/${sha}/check-runs`);
-  if (!data || data.total_count === 0) return 'pending';
+  if (!data || data.total_count === 0) return 'no-checks';
   const runs = data.check_runs;
   if (runs.some(r => ['failure', 'timed_out', 'cancelled'].includes(r.conclusion))) return 'failed';
   if (runs.some(r => !r.conclusion || r.status === 'in_progress' || r.status === 'queued')) return 'pending';
@@ -125,8 +125,8 @@ async function govern() {
     )
   );
 
-  const readyPRs = ciResults.filter(r => r.ci === 'success').map(r => r.pr);
-  const pendingPRs = ciResults.filter(r => r.ci !== 'success');
+  const readyPRs = ciResults.filter(r => r.ci === 'success' || r.ci === 'no-checks').map(r => r.pr);
+  const pendingPRs = ciResults.filter(r => r.ci !== 'success' && r.ci !== 'no-checks');
 
   // Auto-close PRs that have been failing CI for >15 min — subagent is gone, no one to fix it
   const CI_FAIL_TTL_MS = 15 * 60 * 1000;
