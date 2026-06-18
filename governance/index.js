@@ -59,7 +59,7 @@ async function ghFetch(path, opts = {}) {
 
 async function getCIStatus(sha) {
   const data = await ghFetch(`/commits/${sha}/check-runs`);
-  if (!data || data.total_count === 0) return 'no-checks';
+  if (!data || data.total_count === 0) return 'pending';
   const runs = data.check_runs;
   if (runs.some(r => ['failure', 'timed_out', 'cancelled'].includes(r.conclusion))) return 'failed';
   if (runs.some(r => !r.conclusion || r.status === 'in_progress' || r.status === 'queued')) return 'pending';
@@ -125,14 +125,8 @@ async function govern() {
     )
   );
 
-  // PRs with no checks are CONFLICTING with main — governance merges them directly
-  // (the union merge driver resolves conflicts server-side, so CI on the branch is moot)
-  const conflictingPRs = ciResults.filter(r => r.ci === 'no-checks').map(r => r.pr);
-  const readyPRs = [
-    ...ciResults.filter(r => r.ci === 'success').map(r => r.pr),
-    ...conflictingPRs,
-  ];
-  const pendingPRs = ciResults.filter(r => r.ci !== 'success' && r.ci !== 'no-checks');
+  const readyPRs = ciResults.filter(r => r.ci === 'success').map(r => r.pr);
+  const pendingPRs = ciResults.filter(r => r.ci !== 'success');
 
   // Auto-close PRs that have been failing CI for >15 min — subagent is gone, no one to fix it
   const CI_FAIL_TTL_MS = 15 * 60 * 1000;
@@ -147,9 +141,6 @@ async function govern() {
         if (ideaId) await notifyServer(ideaId);
       }
     }
-  }
-  if (conflictingPRs.length > 0) {
-    log(`${conflictingPRs.length} conflicting PR(s) — merging directly via union driver`);
   }
 
   if (readyPRs.length === 0) return;
@@ -181,8 +172,28 @@ async function govern() {
     }
 
     if (mergedNums.size > 0) {
-      git('push', 'origin', 'main');
-      log(`Pushed ${mergedNums.size} merge(s) to main`);
+      // Verify the merged result builds before pushing to main
+      log('Running npm run build to verify merged result...');
+      try {
+        execFileSync('npm', ['ci', '--prefer-offline'], { cwd: REPO_DIR, stdio: 'pipe' });
+        execFileSync('npm', ['run', 'build'], { cwd: REPO_DIR, stdio: 'pipe' });
+        log('Build passed — pushing to main');
+        git('push', 'origin', 'main');
+        log(`Pushed ${mergedNums.size} merge(s) to main`);
+      } catch (buildErr) {
+        const out = (buildErr.stdout || buildErr.stderr || '').toString().slice(0, 500);
+        log(`Build failed after merge — reverting. Error: ${out}`);
+        git('reset', '--hard', 'origin/main');
+        // Close all PRs in this batch — ideas go back in pool
+        for (const pr of readyPRs) {
+          if (mergedNums.has(pr.number)) {
+            await closePR(pr.number, `Build failed after union-merge — closing so the idea can be re-proposed with a fix.\n\nError:\n\`\`\`\n${out}\n\`\`\``);
+            const ideaId = extractIdeaId(pr.title);
+            if (ideaId) await notifyServer(ideaId);
+          }
+        }
+        return;
+      }
     }
 
     for (const pr of readyPRs) {
