@@ -181,13 +181,15 @@ async function govern() {
         git('push', 'origin', 'main');
         log(`Pushed ${mergedNums.size} merge(s) to main`);
       } catch (buildErr) {
-        const out = (buildErr.stdout || buildErr.stderr || '').toString().slice(0, 500);
+        const stderr = (buildErr.stderr || '').toString().trim();
+        const stdout = (buildErr.stdout || '').toString().trim();
+        const out = (stderr || stdout).slice(-1000); // tail — error is at the end
         log(`Build failed after merge — reverting. Error: ${out}`);
         git('reset', '--hard', 'origin/main');
         // Close all PRs in this batch — ideas go back in pool
         for (const pr of readyPRs) {
           if (mergedNums.has(pr.number)) {
-            await closePR(pr.number, `Build failed after union-merge — closing so the idea can be re-proposed with a fix.\n\nError:\n\`\`\`\n${out}\n\`\`\``);
+            await closePR(pr.number, `Build failed after union-merge — closing so the idea can be re-proposed with a fix.\n\nError (last 1000 chars):\n\`\`\`\n${out}\n\`\`\``);
             const ideaId = extractIdeaId(pr.title);
             if (ideaId) await notifyServer(ideaId);
           }
