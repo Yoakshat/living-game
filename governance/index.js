@@ -153,49 +153,49 @@ async function govern() {
     git('checkout', 'main');
     git('pull', 'origin', 'main');
 
+    // npm ci once upfront — reused for all build checks this cycle
+    execFileSync('npm', ['ci', '--prefer-offline'], { cwd: REPO_DIR, stdio: 'pipe' });
+
     const mergedNums = new Set();
     const completedIdeas = new Set();
 
     for (const pr of readyPRs) {
       const branch = pr.head.ref;
+      const snapshot = git('rev-parse', 'HEAD');
+
+      // Merge
       try {
         const result = git('merge', '--no-edit', `origin/${branch}`);
         log(`PR #${pr.number} (${branch}): ${result.split('\n')[0]}`);
-        mergedNums.add(pr.number);
-        const ideaId = extractIdeaId(pr.title);
-        if (ideaId) completedIdeas.add(ideaId);
       } catch (err) {
         const msg = err.stderr ? err.stderr.toString().split('\n')[0] : err.message;
         log(`PR #${pr.number} merge error: ${msg}`);
         try { git('merge', '--abort'); } catch {}
+        continue;
+      }
+
+      // Build check
+      try {
+        execFileSync('npm', ['run', 'build'], { cwd: REPO_DIR, stdio: 'pipe' });
+        log(`PR #${pr.number} build passed`);
+        mergedNums.add(pr.number);
+        const ideaId = extractIdeaId(pr.title);
+        if (ideaId) completedIdeas.add(ideaId);
+      } catch (buildErr) {
+        const stderr = (buildErr.stderr || '').toString().trim();
+        const stdout = (buildErr.stdout || '').toString().trim();
+        const out = (stderr || stdout).slice(-1000);
+        log(`PR #${pr.number} build failed — reverting this PR. Error: ${out}`);
+        git('reset', '--hard', snapshot);
+        await closePR(pr.number, `Build failed after union-merge — closing so the idea can be re-proposed with a fix.\n\nError:\n\`\`\`\n${out}\n\`\`\``);
+        const ideaId = extractIdeaId(pr.title);
+        if (ideaId) await notifyServer(ideaId);
       }
     }
 
     if (mergedNums.size > 0) {
-      // Verify the merged result builds before pushing to main
-      log('Running npm run build to verify merged result...');
-      try {
-        execFileSync('npm', ['ci', '--prefer-offline'], { cwd: REPO_DIR, stdio: 'pipe' });
-        execFileSync('npm', ['run', 'build'], { cwd: REPO_DIR, stdio: 'pipe' });
-        log('Build passed — pushing to main');
-        git('push', 'origin', 'main');
-        log(`Pushed ${mergedNums.size} merge(s) to main`);
-      } catch (buildErr) {
-        const stderr = (buildErr.stderr || '').toString().trim();
-        const stdout = (buildErr.stdout || '').toString().trim();
-        const out = (stderr || stdout).slice(-1000); // tail — error is at the end
-        log(`Build failed after merge — reverting. Error: ${out}`);
-        git('reset', '--hard', 'origin/main');
-        // Close all PRs in this batch — ideas go back in pool
-        for (const pr of readyPRs) {
-          if (mergedNums.has(pr.number)) {
-            await closePR(pr.number, `Build failed after union-merge — closing so the idea can be re-proposed with a fix.\n\nError (last 1000 chars):\n\`\`\`\n${out}\n\`\`\``);
-            const ideaId = extractIdeaId(pr.title);
-            if (ideaId) await notifyServer(ideaId);
-          }
-        }
-        return;
-      }
+      git('push', 'origin', 'main');
+      log(`Pushed ${mergedNums.size} merge(s) to main`);
     }
 
     for (const pr of readyPRs) {
