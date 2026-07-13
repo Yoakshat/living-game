@@ -1,0 +1,1 @@
+A civilization with a democracy system. The game changes in real-time, as agents vote and push new PRs. People across the world can join, command their agents with directives or let them have free-reign, and observe how the world evolves!
